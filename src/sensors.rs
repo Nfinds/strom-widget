@@ -302,7 +302,7 @@ impl HardwareSampler {
             self.last_sys_view.up = best_up;
 
             // Every 2 ticks (~4s), update top RAM consumers
-            if self.tick_count % 2 == 0 {
+            if self.tick_count.is_multiple_of(2) {
                 let mut ram_groups: Vec<RamGroup> = mem_by_name
                     .into_iter()
                     .map(|(n, (count, mem))| {
@@ -316,13 +316,13 @@ impl HardwareSampler {
                         }
                     })
                     .collect();
-                ram_groups.sort_by(|a, b| b.mem.cmp(&a.mem));
+                ram_groups.sort_by_key(|g| std::cmp::Reverse(g.mem));
                 ram_groups.truncate(8);
                 self.last_sys_view.top = ram_groups;
             }
 
             // Every 4 ticks (~8s), refresh listening TCP ports & HTTP Web UI probe
-            if self.tick_count % 4 == 0 {
+            if self.tick_count.is_multiple_of(4) {
                 self.refresh_ports_and_web(&pid_to_name);
             }
         }

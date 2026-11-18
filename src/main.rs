@@ -257,7 +257,7 @@ impl StromWidgetApp {
             if let Ok(bytes) = std::fs::read(path) {
                 fonts
                     .font_data
-                    .insert(name.to_string(), FontData::from_owned(bytes).into());
+                    .insert(name.to_string(), FontData::from_owned(bytes));
                 if let Some(fam) = fonts.families.get_mut(&family) {
                     fam.insert(0, name.to_string());
                 }
@@ -2661,7 +2661,7 @@ impl StromWidgetApp {
             ui.separator();
             ui.add_space(6.0);
 
-            // 6. Größe zugeklappt & Design-Theme
+            // 6. Collapsed size and theme
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(t("Gr\u{00f6}\u{00df}e zugeklappt", "Collapsed size"))

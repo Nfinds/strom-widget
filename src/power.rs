@@ -352,28 +352,26 @@ pub fn compute(raw: &RawSensorSample, s: &Settings, monitors_on: bool) -> Comput
         (est_eff, est_loss, est_total)
     };
 
-    let cpu_part = if use_meas && raw.cpu_w.is_some() {
-        PartReading {
-            w: raw.cpu_w.unwrap(),
+    let cpu_part = match raw.cpu_w {
+        Some(w) if use_meas => PartReading {
+            w,
             src: "gem.".to_string(),
-        }
-    } else {
-        PartReading {
+        },
+        _ => PartReading {
             w: cpu_est,
             src: "gesch.".to_string(),
-        }
+        },
     };
 
-    let gpu_part = if use_meas && raw.gpu_w.is_some() {
-        PartReading {
-            w: raw.gpu_w.unwrap(),
+    let gpu_part = match raw.gpu_w {
+        Some(w) if use_meas => PartReading {
+            w,
             src: "gem.".to_string(),
-        }
-    } else {
-        PartReading {
+        },
+        _ => PartReading {
             w: gpu_est,
             src: "gesch.".to_string(),
-        }
+        },
     };
 
     ComputedReading {

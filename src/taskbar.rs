@@ -78,6 +78,7 @@ pub fn query_taskbar_geometry(secondary: bool) -> Option<TaskbarGeometry> {
 /// Calculates physical pixel coordinates (x, y, w, h, grows_up) for either:
 /// - "taskbar": Docked inside the Windows 11 taskbar right next to the system tray (TrafficMonitor style)
 /// - "tr" / "tc" / "br": Corner placements
+#[allow(clippy::too_many_arguments)]
 pub fn compute_window_rect(
     placement: &str,
     expanded: bool,
