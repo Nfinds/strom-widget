@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/img/hero.png" alt="Strom-Widget: what your PC costs, right now. The collapsed strip and the expanded Live panel."></p>
+<p align="center"><img src="docs/img/hero.png" alt="Strom-Widget: what your PC costs, right now. The collapsed strip, the EU energy classes and the icon."></p>
 
 # Strom-Widget
 

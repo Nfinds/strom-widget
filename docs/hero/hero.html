@@ -33,10 +33,10 @@
     max-width: 760px; font-weight: 400;
   }
   .strip { margin-top: 56px; display: block; width: 632px; height: 72px; border-radius: 16px; }
-  .panel {
-    grid-column: 2; grid-row: 1 / 3; align-self: start;
-    width: 520px; height: 788px; object-fit: cover; object-position: top;
-    border-radius: 22px 22px 0 0;
+  /* The icon from assets/icon.svg without its rounded square: ring, arc and bolt. */
+  .mark {
+    grid-column: 2; grid-row: 1 / 3; align-self: center;
+    width: 520px; height: 520px; margin-top: -72px;
   }
   .label { grid-column: 1; grid-row: 2; align-self: end; display: flex; gap: 10px; padding-bottom: 48px; }
   .label span {
@@ -53,7 +53,12 @@
     <p class="lede">A small Windows 11 widget in your taskbar. It reads the real CPU and GPU power, estimates the rest and turns watts into money, live.</p>
     <img class="strip" src="../img/compact-strip.png" alt="The collapsed strip as it sits in the taskbar">
   </div>
-  <img class="panel" src="../img/expanded-live.png" alt="The expanded panel, Live tab">
+  <svg class="mark" viewBox="26 26 204 204" role="img" aria-label="The Strom-Widget icon">
+    <circle cx="128" cy="128" r="90" fill="none" stroke="#3C3C3D" stroke-width="12"/>
+    <circle cx="128" cy="128" r="90" fill="none" stroke="#10936B" stroke-width="12" stroke-linecap="round"
+            stroke-dasharray="424 566" transform="rotate(135 128 128)"/>
+    <path fill="#FFFFFF" d="M143 52 L88 138 H119 L108 204 L168 114 H136 Z"/>
+  </svg>
   <div class="label" aria-label="EU energy classes A to G, the widget is in class B">
     <span style="background:var(--a)">A</span>
     <span class="on" style="background:var(--b)">B</span>
