@@ -4,7 +4,7 @@
 
 A small native widget for Windows 11. It sits in your taskbar and shows three things: what your PC draws right now, what that costs per hour at your tariff, and what this session has cost so far. Click it to open a panel with the full breakdown, your local ports and your session history.
 
-Written in Rust with [egui](https://github.com/emilk/egui). A single 5 MB exe: no Electron, no installer, no background service, no admin rights.
+Written in Rust with [egui](https://github.com/emilk/egui). A single 5 MB exe: no Electron, no installer, no background service, no admin rights. [Download it here.](https://github.com/Nfinds/strom-widget/releases/latest)
 
 <p align="center"><img src="docs/img/compact-strip.png" width="632" alt="The collapsed strip in the taskbar: energy class, watts, cost per hour, CPU, RAM and network"></p>
 
@@ -86,7 +86,11 @@ This is not a wall-socket meter. For exact figures, plug the PC into a power met
 
 ## Install
 
-Requirements: Windows 10 or 11 and the stable Rust toolchain (MSVC).
+**Download:** get `Strom-Widget.exe` from the [latest release](https://github.com/Nfinds/strom-widget/releases/latest) and start it. Windows 10 or 11, nothing to install. Put the exe wherever you like; to remove it, delete the exe and the `%APPDATA%\Strom-Widget` folder.
+
+The exe is built by GitHub Actions straight from this repository, and `SHA256SUMS.txt` next to it lets you check the download. It is not code-signed, so on the first start Windows SmartScreen may say "Windows protected your PC". Click **More info**, then **Run anyway**.
+
+**Build it yourself:** you need the stable Rust toolchain (MSVC).
 
 ```powershell
 git clone https://github.com/Nfinds/strom-widget.git
@@ -130,6 +134,6 @@ Made by [Nfinds](https://github.com/Nfinds) together with [Claude](https://claud
 - **Deutsch oder Englisch, Euro oder Dollar**, zehn Designs, Taskleiste oder Bildschirmecke, mit der Maus verschiebbar.
 - Alle Daten bleiben lokal in `%APPDATA%\Strom-Widget`. MIT-Lizenz.
 
-Bauen mit `.\build-release.ps1` (Rust-Toolchain nötig). Beim ersten Start übernimmt die Oberfläche die Sprache von Windows.
+**Download:** `Strom-Widget.exe` aus dem [neuesten Release](https://github.com/Nfinds/strom-widget/releases/latest) laden und starten, ohne Installation. Beim ersten Start warnt Windows SmartScreen eventuell, weil die exe nicht signiert ist: „Weitere Informationen“, dann „Trotzdem ausführen“. Selbst bauen mit `.\build-release.ps1` (Rust-Toolchain nötig). Beim ersten Start übernimmt die Oberfläche die Sprache von Windows.
 
 <br clear="right">
