@@ -167,7 +167,11 @@ Chrome at 1600 × 860.
 
 | Path | Content |
 |---|---|
-| `src/main.rs` | The window, the tabs, the settings and everything that is drawn |
+| `src/main.rs` | The app state, the sensor thread, the window geometry and start-up |
+| `src/ui/strip.rs` | The collapsed strip, in the taskbar or in a screen corner |
+| `src/ui/flyout.rs`, `chart.rs` | The expanded panel: header, tab bar, footer and the power chart |
+| `src/ui/live.rs`, `spikes.rs`, `history.rs`, `system.rs` | One file per tab: Live, Spikes, History, System & Ports |
+| `src/ui/settings.rs`, `summary.rs`, `claude_bar.rs` | The settings page, the session receipt and the questions to Claude |
 | `src/power.rs` | The power model: measured and estimated watts, settings |
 | `src/sensors.rs` | RAPL, NVML, network, RAM, listening ports and the probe for local web interfaces |
 | `src/session.rs` | Sessions, history, spikes, and saving them continuously |
@@ -175,6 +179,8 @@ Chrome at 1600 × 860.
 | `src/theme.rs` | Colours, the energy label and the drawn icons |
 | `src/claude.rs` | Asking the local Claude CLI, off the UI thread |
 | `src/i18n.rs`, `src/autostart.rs` | German and English, start with Windows |
+| `src/format.rs` | Money, time and size formatting |
+| `src/selftest.rs` | The screenshot self-test and its example data |
 | `assets/` | The icon |
 | `docs/` | The images of this README and the source of the hero picture |
 
