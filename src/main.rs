@@ -112,7 +112,9 @@ struct StromWidgetApp {
     self_test_step: u32,
     self_test_timer: Instant,
     self_test_waiting: bool,
-    self_test_scroll_bottom: bool,
+    self_test_scroll: Option<f32>,
+    // --demo-data: example ports/web UIs/processes instead of this machine's (for public screenshots)
+    demo_data: bool,
 }
 
 impl StromWidgetApp {
@@ -225,7 +227,8 @@ impl StromWidgetApp {
             self_test_step: 0,
             self_test_timer: Instant::now(),
             self_test_waiting: false,
-            self_test_scroll_bottom: false,
+            self_test_scroll: None,
+            demo_data: false,
         }
     }
 
@@ -393,6 +396,9 @@ impl StromWidgetApp {
             if let Ok(mut guard) = self.sensor_shared.lock() {
                 guard.sys_addon_enabled = self.settings.sys_addon;
                 self.sys_view = guard.sys.clone();
+                if self.demo_data {
+                    apply_demo_system_data(&mut self.sys_view);
+                }
                 guard.raw.clone()
             } else {
                 None
@@ -406,6 +412,9 @@ impl StromWidgetApp {
                 true
             };
             self.reading = compute(&raw, &self.settings, monitors_on);
+            if self.demo_data {
+                self.reading.fg = Some("VS Code".to_string());
+            }
             self.session_mgr.add(&self.reading, self.settings.price_ct);
         }
     }
@@ -619,9 +628,9 @@ impl StromWidgetApp {
                 2 => self.active_tab = ActiveTab::Spikes,
                 3 => self.active_tab = ActiveTab::Sessions,
                 4 => self.active_tab = ActiveTab::Settings,
-                5 => self.self_test_scroll_bottom = true,
+                5 => self.self_test_scroll = Some(260.0),
                 6 => {
-                    self.self_test_scroll_bottom = false;
+                    self.self_test_scroll = Some(0.0);
                     self.active_tab = ActiveTab::System;
                 }
                 _ => {}
@@ -935,8 +944,8 @@ impl StromWidgetApp {
                 let content_h = (ui.available_height() - bottom_reserve).max(200.0);
 
                 let mut scroll = egui::ScrollArea::vertical();
-                if self.self_test_scroll_bottom {
-                    scroll = scroll.vertical_scroll_offset(260.0);
+                if let Some(y) = self.self_test_scroll {
+                    scroll = scroll.vertical_scroll_offset(y);
                 }
                 scroll
                     .max_height(content_h)
@@ -3544,9 +3553,18 @@ fn main() -> eframe::Result<()> {
     }
     let args: Vec<String> = std::env::args().collect();
     let mut self_test_dir: Option<String> = None;
+    let mut demo_data = false;
+    // --zoom 2: render everything at 2x (sharper screenshots)
+    let mut zoom: Option<f32> = None;
     for i in 0..args.len() {
         if args[i] == "--self-test-screenshots" && i + 1 < args.len() {
             self_test_dir = Some(args[i + 1].clone());
+        }
+        if args[i] == "--demo-data" {
+            demo_data = true;
+        }
+        if args[i] == "--zoom" && i + 1 < args.len() {
+            zoom = args[i + 1].parse::<f32>().ok().map(|z| z.clamp(1.0, 4.0));
         }
     }
 
@@ -3604,6 +3622,74 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         WINDOW_TITLE,
         options,
-        Box::new(move |cc| Ok(Box::new(StromWidgetApp::new(cc, self_test_dir)))),
+        Box::new(move |cc| {
+            if let Some(z) = zoom {
+                cc.egui_ctx.set_zoom_factor(z);
+            }
+            let mut app = StromWidgetApp::new(cc, self_test_dir);
+            app.demo_data = demo_data;
+            Ok(Box::new(app))
+        }),
     )
+}
+
+/// Example system data for screenshots that must not show the real machine's ports and programs.
+fn apply_demo_system_data(v: &mut sensors::SysMonView) {
+    use sensors::{ListeningPortEntry, RamGroup, WebServiceInfo};
+    let web = [
+        (3000u16, 4120u32, "node", "Next.js App", "http://localhost:3000/"),
+        (5173, 4388, "node", "Vite + React", "http://localhost:5173/"),
+        (8000, 5210, "python", "Directory listing for /", "http://localhost:8000/"),
+    ];
+    v.web = web
+        .iter()
+        .map(|&(port, pid, name, title, url)| WebServiceInfo {
+            port,
+            pid,
+            name: name.to_string(),
+            title: title.to_string(),
+            url: url.to_string(),
+            lan: false,
+        })
+        .collect();
+    let mut ports: Vec<ListeningPortEntry> = web
+        .iter()
+        .map(|&(port, pid, name, title, url)| ListeningPortEntry {
+            port,
+            pid,
+            name: name.to_string(),
+            addr: "127.0.0.1".to_string(),
+            is_web: true,
+            web_title: Some(title.to_string()),
+            web_url: Some(url.to_string()),
+        })
+        .collect();
+    for (port, pid, name) in [(5432u16, 3016u32, "postgres"), (6379, 2984, "redis-server"), (27017, 3340, "mongod")] {
+        ports.push(ListeningPortEntry {
+            port,
+            pid,
+            name: name.to_string(),
+            addr: "127.0.0.1".to_string(),
+            is_web: false,
+            web_title: None,
+            web_url: None,
+        });
+    }
+    ports.sort_by_key(|p| p.port);
+    v.all_ports = ports;
+    v.top = [
+        ("chrome", "Google Chrome", 24usize, 2_254_000_000u64, 6.5f64),
+        ("code", "VS Code", 9, 1_380_000_000, 3.1),
+        ("discord", "Discord", 6, 640_000_000, 0.8),
+        ("steam", "Steam", 5, 455_000_000, 0.4),
+    ]
+    .iter()
+    .map(|&(n, title, count, mem, cpu)| RamGroup {
+        n: n.to_string(),
+        title: title.to_string(),
+        count,
+        mem,
+        cpu,
+    })
+    .collect();
 }
