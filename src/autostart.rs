@@ -4,8 +4,9 @@
 use windows::core::{HSTRING, PCWSTR};
 use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW, HKEY,
-    HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE, REG_SZ,
+    RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW,
+    RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE,
+    REG_SZ,
 };
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -20,6 +21,26 @@ fn open(access: windows::Win32::System::Registry::REG_SAM_FLAGS) -> Option<HKEY>
     } else {
         None
     }
+}
+
+/// Opens the Run key for writing and creates it if it is missing, as on a fresh user profile.
+fn open_for_write() -> Option<HKEY> {
+    let mut key = HKEY::default();
+    let sub = HSTRING::from(RUN_KEY);
+    let rc = unsafe {
+        RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            PCWSTR(sub.as_ptr()),
+            0,
+            PCWSTR::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_SET_VALUE,
+            None,
+            &mut key,
+            None,
+        )
+    };
+    (rc == ERROR_SUCCESS).then_some(key)
 }
 
 /// True if a Run value with this name exists.
@@ -37,7 +58,7 @@ pub fn is_enabled_named(name: &str) -> bool {
 
 /// Writes (enable) or removes (disable) the Run value pointing at `exe`.
 pub fn set_named(name: &str, enable: bool, exe: &str) -> bool {
-    let Some(key) = open(KEY_SET_VALUE) else {
+    let Some(key) = open_for_write() else {
         return false;
     };
     let n = HSTRING::from(name);
