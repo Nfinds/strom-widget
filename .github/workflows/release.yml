@@ -16,7 +16,7 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Tag must match Cargo.toml version
         run: |
@@ -36,7 +36,8 @@ jobs:
       - name: Checksum
         run: |
           $hash = (Get-FileHash Strom-Widget.exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  Strom-Widget.exe" | Out-File -Encoding ascii SHA256SUMS.txt
+          # LF line ending, so `sha256sum -c` also works on Linux and macOS
+          [IO.File]::WriteAllText("$PWD/SHA256SUMS.txt", "$hash  Strom-Widget.exe`n")
           Get-Content SHA256SUMS.txt
 
       - name: Publish release
