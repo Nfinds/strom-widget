@@ -1,0 +1,46 @@
+[package]
+name = "strom-widget"
+version = "2.0.0"
+edition = "2021"
+description = "Native Rust Windows 11 Taskbar & Desktop Power Widget"
+license = "MIT"
+publish = false
+
+[dependencies]
+eframe = "0.29"
+egui = "0.29"
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+sysinfo = "0.32"
+nvml-wrapper = "0.10"
+tray-icon = "0.19"
+global-hotkey = "0.6"
+open = "5"
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_Performance",
+    "Win32_System_Registry",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_System_LibraryLoader",
+    "Win32_Globalization",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dwm",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
+] }
+
+[build-dependencies]
+winresource = "0.1"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
