@@ -6,7 +6,7 @@ fn main() {
         res.set("ProductName", "Strom-Widget");
         res.set("FileDescription", "Strom-Widget");
         if let Err(e) = res.compile() {
-            println!("cargo:warning=Icon konnte nicht eingebettet werden: {e}");
+            println!("cargo:warning=Could not embed the icon: {e}");
         }
     }
 }

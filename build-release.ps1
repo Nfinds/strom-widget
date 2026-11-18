@@ -1,4 +1,5 @@
-# Baut die Release-exe ohne lokale Pfade (Benutzername, Ordner) im Binary.
+# Builds the release exe with no local paths (user name, folder) inside the binary
+# and puts Strom-Widget.exe next to this script.
 $here = (Resolve-Path $PSScriptRoot).Path
 $env:RUSTFLAGS = "--remap-path-prefix=$env:USERPROFILE=~ --remap-path-prefix=$here=src"
 cargo build --release

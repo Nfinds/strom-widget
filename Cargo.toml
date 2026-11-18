@@ -2,7 +2,9 @@
 name = "strom-widget"
 version = "2.0.0"
 edition = "2021"
-description = "Native Rust Windows 11 Taskbar & Desktop Power Widget"
+description = "Native Windows 11 power widget: live watts, cost per hour, sessions and spikes"
+repository = "https://github.com/Nfinds/strom-widget"
+readme = "README.md"
 license = "MIT"
 publish = false
 

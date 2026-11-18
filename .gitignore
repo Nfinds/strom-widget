@@ -1,6 +1,8 @@
+# Build
 /target
 *.exe
 *.pdb
 *.log
+# Local settings and sessions never belong in the repo
 settings.json*
 sessions/

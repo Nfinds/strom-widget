@@ -1,0 +1,20 @@
+name: CI
+
+# Builds, tests and lints every push to main and every pull request.
+# The widget is Windows only, so there is one runner.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo build --locked
+      - run: cargo test --locked
+      - run: cargo clippy --all-targets --locked -- -D warnings
