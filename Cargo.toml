@@ -1,6 +1,6 @@
 [package]
 name = "strom-widget"
-version = "2.0.0"
+version = "2.1.0"
 edition = "2021"
 description = "Native Windows 11 power widget: live watts, cost per hour, sessions and spikes"
 repository = "https://github.com/Nfinds/strom-widget"

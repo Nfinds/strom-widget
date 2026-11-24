@@ -4,14 +4,14 @@
 
 **A power meter for your Windows taskbar, in watts and in money.**
 
-It sits in the taskbar and shows three things: what your PC draws right now, what that costs per
-hour at your tariff, and what this session has cost so far. Click it to open a panel with the full
-breakdown, your local ports and your session history.
+It sits in the taskbar and shows what your PC draws right now and what this session has cost so
+far. Click it to open a panel with the cost per hour, the full breakdown, your history by day,
+week, month and year with a forecast for the month, your network usage and your local ports.
 
 Written in Rust with [egui](https://github.com/emilk/egui). One 5 MB exe, with no Electron, no
 installer, no background service and no admin rights.
 
-<p align="center"><img src="docs/img/compact-strip.png" width="632" alt="The collapsed strip in the taskbar: energy class, watts, cost per hour, CPU, RAM and network"></p>
+<p align="center"><img src="docs/img/compact-strip.png" width="524" alt="The collapsed strip in the taskbar: watts, session cost, CPU, RAM and network"></p>
 
 > [!NOTE]
 > Processor and graphics card are measured. Mainboard, power supply loss and monitors are estimated
@@ -31,16 +31,16 @@ and start it. It docks into the taskbar. Windows 10 or 11, nothing to install.
 
 ## Live watts, in money
 
-<img align="right" src="docs/img/expanded-live.png" width="300" alt="Live tab: energy class, breakdown per component, session totals">
+<img align="right" src="docs/img/expanded-live.png" width="300" alt="Now tab: power chart, breakdown per component, session totals and spikes">
 
-The number in the strip is the whole PC at the wall socket. You see it as cost per hour, updating
-live.
+The number in the strip is the whole PC at the wall socket. The panel also shows it as cost per
+hour, updating live.
 
-The Live tab splits that number into processor, graphics card, rest of the system, power supply
+The Now tab splits that number into processor, graphics card, rest of the system, power supply
 loss and monitors. Each line says whether it is **measured** or **estimated**, so you always know
 how much of the total is a guess.
 
-The colour is the EU energy label. Below 150 W you are in class A, and every further 100 W moves
+The badge next to the watts is the EU energy label. Below 150 W you are in class A, and every further 100 W moves
 you one class towards G.
 
 Under the breakdown you get the session totals: start time, duration, kWh, average, peak and cost
@@ -58,11 +58,42 @@ so far. Above it is a chart for the last 15 minutes, the last hour or the whole 
 | Power supply loss | from the load and the PSU rating you choose | estimated |
 | Monitors | your list of monitors and their draw | estimated |
 
-A second model runs alongside, built only from CPU and GPU load, and the Live tab shows how far
+A second model runs alongside, built only from CPU and GPU load, and the Now tab shows how far
 apart the two are.
 
 For exact figures, plug the PC into a power meter once and adjust the rest-of-system value until
 the two match.
+
+## History and forecast
+
+<img align="right" src="docs/img/history.png" width="300" alt="History tab: cost per day of the month, average, forecast, heat map by hour and the session list">
+
+The History tab shows what the PC cost per day, week, month or year, with the average and a
+comparison with the period before.
+
+- **Forecast for the month.** It takes your typical day from the last two weeks, adds what is
+  still to come today from your usual hourly pattern, and does the same for the days left in the
+  month. The year view works the same way from your first recorded day.
+- **Monthly budget.** Set one and the forecast tells you whether you will stay under it.
+- **When the PC draws power.** A heat map of the average watts per weekday and hour over the last
+  four weeks.
+- **Sessions** with start, end, duration, kWh and cost, and how each one ended: sleep, shut down,
+  signed out or closed.
+- **Export.** All days as CSV into your Documents folder.
+
+<br clear="right">
+
+## Network
+
+<img align="right" src="docs/img/network.png" width="300" alt="Network tab: download and upload now, data volume per day, records and connection type">
+
+Download and upload right now with a chart for the last 15 minutes, and below it the data volume
+per day for the week or month, with the daily average and a comparison with last month. Records
+show the fastest download and the day with the most data.
+
+Usage per program would need admin rights, so the widget does not show it.
+
+<br clear="right">
 
 ## System & Ports
 
@@ -86,13 +117,14 @@ The tab label shows the count, so you notice when something new starts listening
 ## Spikes, sessions and the receipt
 
 - **Spikes.** When the draw is at least 60 W and 35 % above the load of the last two minutes, the
-  widget records a spike and the programs that were busy at that moment.
+  widget records a spike and the programs that were busy at that moment. The Now tab lists them.
 - **Sessions survive a power cut.** They are saved every 30 seconds, so even a hard power-off
   loses half a minute at most. The session is closed on the next start.
-- **Good night.** One button (or Windows shutting down) closes the session and prints a receipt
-  with duration, kWh, cost, average and peak, the spikes, the CPU load per program, and what a
-  month like this would cost.
-- **History** keeps every finished session with its total.
+- **Sessions know how they ended.** Sleep ends a session and waking starts a new one, so a night
+  of sleep does not count as one long session. Shutting down, restarting and signing out are noted
+  too, and only a real crash or power cut shows up as "ended unexpectedly".
+- **Good night.** One button closes the session and prints a receipt with duration, kWh, cost,
+  average and peak, the spikes, the CPU load per program, and what a month like this would cost.
 
 ## Your setup, your numbers
 
@@ -169,12 +201,16 @@ Chrome at 1600 × 860.
 |---|---|
 | `src/main.rs` | The app state, the sensor thread, the window geometry and start-up |
 | `src/ui/strip.rs` | The collapsed strip, in the taskbar or in a screen corner |
-| `src/ui/flyout.rs`, `chart.rs` | The expanded panel: header, tab bar, footer and the power chart |
-| `src/ui/live.rs`, `spikes.rs`, `history.rs`, `system.rs` | One file per tab: Live, Spikes, History, System & Ports |
+| `src/ui/flyout.rs`, `chart.rs`, `bars.rs` | The expanded panel: header, tab bar, footer, the power chart and the bar charts |
+| `src/ui/live.rs`, `history.rs`, `net.rs`, `system.rs` | One file per tab: Now, History, Network, System & Ports |
+| `src/ui/spikes.rs` | The spike details, opened from the Now tab |
 | `src/ui/settings.rs`, `summary.rs`, `claude_bar.rs` | The settings page, the session receipt and the questions to Claude |
 | `src/power.rs` | The power model: measured and estimated watts, settings |
 | `src/sensors.rs` | RAPL, NVML, network, RAM, listening ports and the probe for local web interfaces |
-| `src/session.rs` | Sessions, history, spikes, and saving them continuously |
+| `src/procs.rs` | All processes with CPU and memory from one Windows call |
+| `src/session.rs` | Sessions, spikes, the session index, and saving them continuously |
+| `src/daybook.rs` | Energy, cost and network volume per day and hour (`days.json`), and the forecast |
+| `src/endsession.rs` | Notices shutdown, sign-out and sleep, so a session says how it ended |
 | `src/taskbar.rs` | Docking into the Windows taskbar and the corner placements |
 | `src/theme.rs` | Colours, the energy label and the drawn icons |
 | `src/claude.rs` | Asking the local Claude CLI, off the UI thread |
@@ -195,8 +231,8 @@ every push.
 Raise `version` in `Cargo.toml`, commit, then push a tag with the same number:
 
 ```powershell
-git tag v2.0.1
-git push origin v2.0.1
+git tag v2.1.1
+git push origin v2.1.1
 ```
 
 GitHub Actions checks that the tag matches `Cargo.toml`, builds the exe with
@@ -215,8 +251,10 @@ PC gerade zieht, was das pro Stunde kostet und was die laufende Sitzung bisher g
   Mainboard, Netzteilverluste und Monitore werden geschätzt.
 - **System & Ports** erkennt lokale Weboberflächen (Dev-Server, Dashboards) und öffnet sie mit
   einem Klick. Dazu kommen alle offenen Ports mit Programm und PID.
+- **Verlauf** nach Tag, Woche, Monat und Jahr mit Hochrechnung für den Monat, Monatsbudget und
+  Wärmekarte nach Uhrzeit, dazu **Netzwerk** mit Datenvolumen pro Tag und Durchschnitt.
 - **Lastspitzen** mit der wahrscheinlichen Ursache, **Sitzungen**, die auch einen harten
-  Stromausfall überstehen, und zum Abschluss eine **Gute-Nacht-Quittung**.
+  Stromausfall überstehen und beim Energiesparmodus sauber enden, und zum Abschluss eine **Gute-Nacht-Quittung**.
 - Deutsch oder Englisch, Euro oder Dollar. Alle Daten bleiben lokal in `%APPDATA%\Strom-Widget`.
 
 **Download:** `Strom-Widget.exe` aus dem [neuesten Release](https://github.com/Nfinds/strom-widget/releases/latest)
