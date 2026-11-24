@@ -416,6 +416,11 @@ impl StromWidgetApp {
             } else {
                 (0.0, 0.0)
             };
+            // Woken from sleep: the session before it ends at its last sample.
+            if endsession::woke_from_sleep(self.session_mgr.last_sample(), session::now_ms()) {
+                self.session_mgr.split_after_sleep();
+                self.sessions_cache = self.session_mgr.list_sessions(self.sessions_shown);
+            }
             self.session_mgr.add(&self.reading, self.settings.price_ct, net);
         }
     }

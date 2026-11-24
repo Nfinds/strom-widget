@@ -371,6 +371,7 @@ impl SessionManager {
         let reason = match marker.filter(|m| endsession::marker_matches(m, s.start, s.last)) {
             Some(EndMarker { kind: EndKind::Shutdown, .. }) => t("PC heruntergefahren oder neu gestartet", "PC shut down or restarted"),
             Some(EndMarker { kind: EndKind::SignOut, .. }) => t("abgemeldet", "signed out"),
+            Some(EndMarker { kind: EndKind::Sleep, .. }) => t("Energiesparmodus", "sleep"),
             None => t("unerwartet beendet (Strom weg oder Absturz)", "ended unexpectedly (power loss or crash)"),
         };
         Some(self.write_final(&s, reason))
@@ -666,6 +667,22 @@ impl SessionManager {
         } else {
             self.save();
         }
+    }
+
+    /// The PC slept since the last sample: archive the session as it was before sleep (its end
+    /// is the last sample) and start a new one. Too short ones are dropped, as on recovery.
+    pub fn split_after_sleep(&mut self) {
+        if self.s.wh > 0.01 && self.dur_s() >= 60.0 {
+            self.finalize(t("Energiesparmodus", "sleep"));
+        } else {
+            let _ = fs::remove_file(&self.current_file);
+        }
+        self.reset();
+    }
+
+    /// Time of the current session's last sample (ms).
+    pub fn last_sample(&self) -> u64 {
+        self.s.last
     }
 
     /// Running time of the current session in seconds (cheap, for per-frame labels).

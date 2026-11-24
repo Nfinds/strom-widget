@@ -1,14 +1,19 @@
-//! Notices when Windows shuts down, restarts or signs out, so the session is not later listed
-//! as "ended unexpectedly".
+//! Notices when Windows shuts down, restarts, signs out or goes to sleep, so the session is not
+//! later listed as "ended unexpectedly" and does not run on through the night.
 //!
 //! Windows sends `WM_ENDSESSION` to every top-level window just before it ends the process.
 //! A hidden window on its own thread answers it by writing a small marker file (reason and
 //! time). Finishing the session itself waits for the next start, where `SessionManager`
 //! reads the marker: after `WM_ENDSESSION` the process may be ended at any moment, and the
 //! session lives on the UI thread.
+//!
+//! Sleep (`WM_POWERBROADCAST` / `PBT_APMSUSPEND`) writes the same marker, in case the PC never
+//! wakes up again, and notes the time for the UI thread: after waking, it sees the gap since its
+//! last sample and closes the session as it was before sleep (`after_suspend`).
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 /// Name of the marker file next to `current.json`.
@@ -20,6 +25,8 @@ pub enum EndKind {
     /// Shut down or restarted (Windows does not say which).
     Shutdown,
     SignOut,
+    /// Went to sleep or hibernation.
+    Sleep,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +37,8 @@ pub struct EndMarker {
 }
 
 static MARKER_PATH: OnceLock<PathBuf> = OnceLock::new();
+/// When Windows announced sleep (ms), 0 = not announced.
+static SUSPENDED_AT: AtomicU64 = AtomicU64::new(0);
 
 /// Starts the watcher thread; `marker` is where the marker file goes.
 pub fn spawn_watcher(marker: PathBuf) {
@@ -71,7 +80,9 @@ unsafe extern "system" fn wnd_proc(
     lparam: windows::Win32::Foundation::LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::Foundation::LRESULT;
-    use windows::Win32::UI::WindowsAndMessaging::{DefWindowProcW, ENDSESSION_LOGOFF, WM_ENDSESSION, WM_QUERYENDSESSION};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DefWindowProcW, ENDSESSION_LOGOFF, PBT_APMSUSPEND, WM_ENDSESSION, WM_POWERBROADCAST, WM_QUERYENDSESSION,
+    };
     match msg {
         // Never hold up the shutdown.
         WM_QUERYENDSESSION => LRESULT(1),
@@ -82,6 +93,13 @@ unsafe extern "system" fn wnd_proc(
                 write_marker(kind);
             }
             LRESULT(0)
+        }
+        WM_POWERBROADCAST => {
+            if wparam.0 as u32 == PBT_APMSUSPEND {
+                SUSPENDED_AT.store(crate::session::now_ms(), Ordering::Relaxed);
+                write_marker(EndKind::Sleep);
+            }
+            LRESULT(1)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
@@ -109,6 +127,50 @@ pub fn marker_matches(m: &EndMarker, start: u64, last: u64) -> bool {
     m.t >= start && m.t <= last.saturating_add(120_000)
 }
 
+/// Samples within this long after the sleep announcement still belong before sleep; a pause
+/// in the samples longer than this after it means the PC really slept.
+const SLEEP_GRACE_MS: u64 = 30_000;
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum AfterSuspend {
+    /// Announced, but the samples have not paused yet (the PC is about to sleep).
+    Pending,
+    /// The samples paused after the announcement: the PC slept and is awake again.
+    Slept,
+    /// Samples went on well past the announcement: sleep was cancelled or failed.
+    DidNotSleep,
+}
+
+/// `last` = time of the session's last sample, `now` = the next one.
+pub fn after_suspend(suspended_at: u64, last: u64, now: u64) -> AfterSuspend {
+    if last > suspended_at.saturating_add(SLEEP_GRACE_MS) {
+        AfterSuspend::DidNotSleep
+    } else if now.saturating_sub(last) > SLEEP_GRACE_MS {
+        AfterSuspend::Slept
+    } else {
+        AfterSuspend::Pending
+    }
+}
+
+/// For the UI thread before each sample: true once, right after the PC woke from sleep.
+pub fn woke_from_sleep(last: u64, now: u64) -> bool {
+    let at = SUSPENDED_AT.load(Ordering::Relaxed);
+    if at == 0 {
+        return false;
+    }
+    match after_suspend(at, last, now) {
+        AfterSuspend::Pending => false,
+        AfterSuspend::Slept => {
+            SUSPENDED_AT.store(0, Ordering::Relaxed);
+            true
+        }
+        AfterSuspend::DidNotSleep => {
+            SUSPENDED_AT.store(0, Ordering::Relaxed);
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,5 +181,17 @@ mod tests {
         assert!(marker_matches(&m, 0, 990_000)); // 10 s after the last save
         assert!(!marker_matches(&m, 0, 800_000)); // over 2 min after: from another run
         assert!(!marker_matches(&m, 1_100_000, 1_200_000)); // before this session began
+    }
+
+    #[test]
+    fn sleep_decision() {
+        let at = 1_000_000;
+        // Last sample just before or shortly after the announcement, next one hours later.
+        assert_eq!(after_suspend(at, at - 1_000, at + 8 * 3_600_000), AfterSuspend::Slept);
+        assert_eq!(after_suspend(at, at + 2_000, at + 3_600_000), AfterSuspend::Slept);
+        // Still sampling normally around the announcement: not yet.
+        assert_eq!(after_suspend(at, at + 2_000, at + 3_800), AfterSuspend::Pending);
+        // Samples went on for over half a minute: the PC did not sleep.
+        assert_eq!(after_suspend(at, at + 45_000, at + 46_800), AfterSuspend::DidNotSleep);
     }
 }
