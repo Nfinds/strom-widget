@@ -362,7 +362,7 @@ impl StromWidgetApp {
             if quit_resp.hovered() { pal.ink } else { pal.ink_muted },
         );
         if quit_resp.clicked() {
-            self.session_mgr.save();
+            self.session_mgr.end_on_quit();
             std::process::exit(0);
         }
     }

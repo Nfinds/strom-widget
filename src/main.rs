@@ -6,6 +6,7 @@ mod i18n;
 mod autostart;
 mod claude;
 mod daybook;
+mod endsession;
 mod procs;
 mod format;
 mod power;
@@ -148,6 +149,7 @@ impl StromWidgetApp {
         i18n::set_usd(settings.currency == "USD");
         let app_dir = Settings::app_data_dir();
         let mut session_mgr = SessionManager::new(app_dir);
+        endsession::spawn_watcher(session_mgr.end_marker_path());
 
         let init_raw = RawSensorSample {
             cpu_w: Some(38.0),
@@ -458,6 +460,11 @@ impl eframe::App for StromWidgetApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_sensors();
         self.sync_window_geometry(ctx, false);
+
+        // Alt+F4 or a close from outside: end the session like "Quit" does.
+        if ctx.input(|i| i.viewport().close_requested()) && self.self_test_dir.is_none() {
+            self.session_mgr.end_on_quit();
+        }
 
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
             let mut closed_claude = false;

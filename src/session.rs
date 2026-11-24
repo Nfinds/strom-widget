@@ -3,6 +3,7 @@
 // 100% compatible with the existing JSON format in %APPDATA%\Strom-Widget.
 
 use crate::daybook::DayBook;
+use crate::endsession::{self, EndKind, EndMarker};
 use crate::i18n::t;
 use crate::power::{ComputedReading, TopProcSample};
 use serde::{Deserialize, Serialize};
@@ -349,7 +350,15 @@ impl SessionManager {
         self.last_save = 0;
     }
 
+    /// Where the end-of-session watcher leaves its marker (see endsession.rs).
+    pub fn end_marker_path(&self) -> PathBuf {
+        self.current_file.with_file_name(endsession::MARKER_FILE)
+    }
+
+    /// Archives the session the previous run left in `current.json`. Its reason comes from the
+    /// marker Windows' shutdown or sign-out left; without one the run really ended unexpectedly.
     fn recover_previous(&self) -> Option<SessionSummary> {
+        let marker = endsession::take_marker(&self.end_marker_path());
         if !self.current_file.exists() {
             return None;
         }
@@ -359,7 +368,12 @@ impl SessionManager {
         if s.wh <= 0.01 || s.last.saturating_sub(s.start) < 60_000 {
             return None;
         }
-        Some(self.write_final(&s, t("unerwartet beendet (Strom weg oder Absturz)", "ended unexpectedly (power loss or crash)")))
+        let reason = match marker.filter(|m| endsession::marker_matches(m, s.start, s.last)) {
+            Some(EndMarker { kind: EndKind::Shutdown, .. }) => t("PC heruntergefahren oder neu gestartet", "PC shut down or restarted"),
+            Some(EndMarker { kind: EndKind::SignOut, .. }) => t("abgemeldet", "signed out"),
+            None => t("unerwartet beendet (Strom weg oder Absturz)", "ended unexpectedly (power loss or crash)"),
+        };
+        Some(self.write_final(&s, reason))
     }
 
     /// Adds one reading. `net` is (download, upload) in bytes/s.
@@ -640,6 +654,18 @@ impl SessionManager {
         self.save_index();
         self.days.flush();
         summary
+    }
+
+    /// "Quit" in the panel: archive the session now, with the same minimum as the recovery at
+    /// the next start (shorter ones are dropped there, so saving is enough).
+    pub fn end_on_quit(&mut self) {
+        if self.s.wh > 0.01 && self.dur_s() >= 60.0 {
+            self.finalize(t("Widget beendet", "widget closed"));
+            // A second close event must not archive the same session again.
+            self.reset();
+        } else {
+            self.save();
+        }
     }
 
     /// Running time of the current session in seconds (cheap, for per-frame labels).
