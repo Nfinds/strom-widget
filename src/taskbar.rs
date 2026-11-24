@@ -331,29 +331,107 @@ pub fn enforce_taskbar_overlay_style(title: &str, pinned: bool, in_taskbar: bool
     }
 }
 
-/// Spawns a lightweight background Win32 thread (25ms tick) that:
-/// 1. Detects Fullscreen mode (F11 browser, video, game) and immediately sends the widget
-///    behind the fullscreen window (`HWND_NOTOPMOST` + `HWND_BOTTOM`) just like the taskbar.
+/// Fallback interval of the z-order guardian. Foreground changes are reported at once by a
+/// WinEvent hook; this tick only catches what sends no event (F11 fullscreen in a browser).
+const GUARD_TICK_MS: u32 = 100;
+
+/// Set by the WinEvent hook: the foreground window changed, check the z-order now.
+static GUARD_DIRTY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+unsafe extern "system" fn on_foreground_change(
+    _hook: windows::Win32::UI::Accessibility::HWINEVENTHOOK,
+    _event: u32,
+    _hwnd: HWND,
+    _id_object: i32,
+    _id_child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    GUARD_DIRTY.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A window handle that is looked up once and again only after the window is gone
+/// (`FindWindowW` walks all top-level windows, too costly ten times a second).
+struct CachedHwnd(HWND);
+
+impl CachedHwnd {
+    unsafe fn get(&mut self, find: impl FnOnce() -> HWND) -> HWND {
+        use windows::Win32::UI::WindowsAndMessaging::IsWindow;
+        if self.0 .0.is_null() || !IsWindow(self.0).as_bool() {
+            self.0 = find();
+        }
+        self.0
+    }
+}
+
+/// Spawns a background Win32 thread that keeps the widget at the right z-order:
+/// 1. Detects fullscreen mode (F11 browser, video, game) and sends the widget behind the
+///    fullscreen window (`HWND_NOTOPMOST` + `HWND_BOTTOM`) just like the taskbar.
 /// 2. When not in fullscreen, ONLY re-asserts `HWND_TOPMOST` if `Shell_TrayWnd` (the taskbar)
 ///    actually jumped in front of the widget (e.g. when clicking the taskbar).
+///
+/// It sleeps in `MsgWaitForMultipleObjects`: woken by a foreground change (WinEvent hook) or
+/// after `GUARD_TICK_MS`. The earlier version polled every 25 ms.
 pub fn spawn_taskbar_zorder_guardian(
     title: &'static str,
     z_state: std::sync::Arc<std::sync::atomic::AtomicU8>,
 ) {
-    // z_state bits: bit 0 = pinned, bit 1 = in_taskbar
-    std::thread::spawn(move || {
+    use std::sync::atomic::Ordering;
+    use windows::Win32::UI::Accessibility::SetWinEventHook;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, MsgWaitForMultipleObjects, PeekMessageW, TranslateMessage,
+        EVENT_SYSTEM_FOREGROUND, MSG, PM_REMOVE, QS_ALLINPUT, WINEVENT_OUTOFCONTEXT,
+        WINEVENT_SKIPOWNPROCESS,
+    };
+
+    // z_state bits: bit 0 = pinned, bit 1 = in_taskbar, bit 2 = secondary taskbar
+    let _ = std::thread::Builder::new().name("z-guard".into()).spawn(move || {
         let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
         let mut was_fullscreen = false;
+        let mut own = CachedHwnd(HWND::default());
+        let mut tray = CachedHwnd(HWND::default());
+        let mut tray_secondary = false;
+
+        // Out-of-context hooks are delivered through this thread's message queue.
+        let _hook = unsafe {
+            SetWinEventHook(
+                EVENT_SYSTEM_FOREGROUND,
+                EVENT_SYSTEM_FOREGROUND,
+                None,
+                Some(on_foreground_change),
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+            )
+        };
+
         loop {
-            let bits = z_state.load(std::sync::atomic::Ordering::Relaxed);
+            unsafe {
+                let _ = MsgWaitForMultipleObjects(None, false, GUARD_TICK_MS, QS_ALLINPUT);
+                let mut msg = MSG::default();
+                while PeekMessageW(&mut msg, HWND::default(), 0, 0, PM_REMOVE).as_bool() {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+            GUARD_DIRTY.store(false, Ordering::Relaxed);
+
+            let bits = z_state.load(Ordering::Relaxed);
             let pinned = (bits & 1) != 0;
             let in_taskbar = (bits & 2) != 0;
             let secondary = (bits & 4) != 0;
+            if secondary != tray_secondary {
+                tray = CachedHwnd(HWND::default());
+                tray_secondary = secondary;
+            }
             if pinned || in_taskbar {
                 unsafe {
-                    if let Ok(hwnd) = FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) {
+                    let hwnd = own.get(|| {
+                        FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())).unwrap_or_default()
+                    });
+                    {
                         if !hwnd.0.is_null() {
-                            let tray_hwnd = resolve_tray_hwnd(secondary);
+                            let tray_hwnd = tray.get(|| resolve_tray_hwnd(secondary));
                             let fullscreen = is_fullscreen_covering_taskbar(hwnd, tray_hwnd);
 
                             if fullscreen {
@@ -426,7 +504,6 @@ pub fn spawn_taskbar_zorder_guardian(
                     }
                 }
             }
-            std::thread::sleep(std::time::Duration::from_millis(25));
         }
     });
 }

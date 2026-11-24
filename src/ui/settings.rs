@@ -150,6 +150,33 @@ impl StromWidgetApp {
 
             ui.add_space(6.0);
 
+            // 2b. Monthly budget (0 or empty = off)
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(tr!("Monatsbudget ({})", "Monthly budget ({})", if i18n::is_usd() { "$" } else { "\u{20ac}" }))
+                        .font(FontId::proportional(12.0))
+                        .color(pal.ink),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(
+                        RichText::new(if self.settings.monthly_budget > 0.0 { t("im Verlauf", "in History") } else { t("aus", "off") })
+                            .font(FontId::proportional(11.0))
+                            .color(pal.ink_muted),
+                    );
+                    let resp = ui.add_sized(
+                        [85.0, 22.0],
+                        egui::TextEdit::singleline(&mut self.budget_buf).hint_text("0"),
+                    );
+                    if resp.changed() {
+                        let v = parse_price(&self.budget_buf).unwrap_or(0.0).max(0.0);
+                        self.settings.monthly_budget = (v * 100.0).round() / 100.0;
+                        self.settings.save();
+                    }
+                });
+            });
+
+            ui.add_space(6.0);
+
             // 3. Messmodus
             ui.horizontal(|ui| {
                 ui.label(

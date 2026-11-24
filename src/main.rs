@@ -5,6 +5,8 @@
 mod i18n;
 mod autostart;
 mod claude;
+mod daybook;
+mod procs;
 mod format;
 mod power;
 mod selftest;
@@ -42,15 +44,27 @@ enum ActiveTab {
     Live,
     Spikes,
     Sessions,
+    Net,
     System,
     Settings,
     Summary,
+}
+
+/// Period shown in the History tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HistPeriod {
+    Day,
+    Week,
+    Month,
+    Year,
 }
 
 struct SharedSensorData {
     raw: Option<RawSensorSample>,
     sys: SysMonView,
     sys_addon_enabled: bool,
+    /// The System tab is visible: scan ports often (otherwise about once a minute).
+    ports_wanted: bool,
 }
 
 struct FrozenChart {
@@ -76,6 +90,14 @@ struct StromWidgetApp {
     open_spike_idx: Option<usize>,
     show_all_ports: bool,
 
+    // History & network tabs
+    hist_period: HistPeriod,
+    sessions_shown: usize,
+    /// Network tab: true = month view of the daily volume, false = last 7 days.
+    net_month: bool,
+    /// Result of the last CSV export (path or error) for the note under the list.
+    export_note: Option<String>,
+
     // Summary state
     active_summary: Option<SessionSummary>,
     summary_title: String,
@@ -87,6 +109,7 @@ struct StromWidgetApp {
     // Settings inputs
     price_input_buf: String,
     price_input_valid: bool,
+    budget_buf: String,
     rest_w_buf: String,
     psu_w_buf: String,
     monitor_w_bufs: Vec<String>,
@@ -138,24 +161,25 @@ impl StromWidgetApp {
             fg: None,
         };
         let reading = compute(&init_raw, &settings, true);
-        session_mgr.add(&reading, settings.price_ct);
+        session_mgr.add(&reading, settings.price_ct, (0.0, 0.0));
 
         let shared = Arc::new(Mutex::new(SharedSensorData {
             raw: Some(init_raw),
             sys: SysMonView::default(),
             sys_addon_enabled: settings.sys_addon,
+            ports_wanted: false,
         }));
 
         let shared_bg = Arc::clone(&shared);
         let ctx_bg = cc.egui_ctx.clone();
-        std::thread::spawn(move || {
+        let _ = std::thread::Builder::new().name("sampler".into()).spawn(move || {
             let mut sampler = HardwareSampler::new();
             loop {
-                let sys_on = shared_bg
+                let (sys_on, ports_wanted) = shared_bg
                     .lock()
-                    .map(|s| s.sys_addon_enabled)
-                    .unwrap_or(true);
-                let raw = sampler.sample(sys_on);
+                    .map(|s| (s.sys_addon_enabled, s.ports_wanted))
+                    .unwrap_or((true, false));
+                let raw = sampler.sample(sys_on, ports_wanted);
                 let sys_snapshot = sampler.last_sys_view.clone();
                 if let Ok(mut guard) = shared_bg.lock() {
                     guard.raw = Some(raw);
@@ -173,6 +197,11 @@ impl StromWidgetApp {
         spawn_taskbar_zorder_guardian(WINDOW_TITLE, Arc::clone(&z_state));
 
         let price_input_buf = format_de_price(settings.price_ct);
+        let budget_buf = if settings.monthly_budget > 0.0 {
+            format_de_price(settings.monthly_budget)
+        } else {
+            String::new()
+        };
         let rest_w_buf = format!("{:.0}", settings.rest_w);
         let psu_w_buf = format!("{:.0}", settings.psu_w);
         let monitor_w_bufs = settings
@@ -181,7 +210,7 @@ impl StromWidgetApp {
             .map(|m| format!("{:.0}", m.w))
             .collect();
 
-        let sessions_cache = session_mgr.list_sessions(60);
+        let sessions_cache = session_mgr.list_sessions(20);
 
         let mut active_summary = None;
         let mut summary_title = String::new();
@@ -202,6 +231,10 @@ impl StromWidgetApp {
             chart_range_s: 900,
             open_spike_idx: None,
             show_all_ports: true,
+            hist_period: HistPeriod::Month,
+            sessions_shown: 20,
+            net_month: true,
+            export_note: None,
             active_summary,
             summary_title,
             summary_fresh: false,
@@ -210,6 +243,7 @@ impl StromWidgetApp {
             shutdown_scheduled: false,
             price_input_buf,
             price_input_valid: true,
+            budget_buf,
             rest_w_buf,
             psu_w_buf,
             monitor_w_bufs,
@@ -353,6 +387,7 @@ impl StromWidgetApp {
         let maybe_raw = {
             if let Ok(mut guard) = self.sensor_shared.lock() {
                 guard.sys_addon_enabled = self.settings.sys_addon;
+                guard.ports_wanted = self.expanded && self.active_tab == ActiveTab::System;
                 self.sys_view = guard.sys.clone();
                 if self.demo_data {
                     apply_demo_system_data(&mut self.sys_view);
@@ -373,7 +408,13 @@ impl StromWidgetApp {
             if self.demo_data {
                 self.reading.fg = Some("VS Code".to_string());
             }
-            self.session_mgr.add(&self.reading, self.settings.price_ct);
+            // Network is only sampled with the system add-on; otherwise count nothing.
+            let net = if self.settings.sys_addon {
+                (self.sys_view.down, self.sys_view.up)
+            } else {
+                (0.0, 0.0)
+            };
+            self.session_mgr.add(&self.reading, self.settings.price_ct, net);
         }
     }
 
@@ -384,7 +425,7 @@ impl StromWidgetApp {
         }
         self.expanded = next;
         if self.expanded {
-            self.sessions_cache = self.session_mgr.list_sessions(60);
+            self.sessions_cache = self.session_mgr.list_sessions(self.sessions_shown);
         }
         self.sync_window_geometry(ctx, true);
     }
@@ -401,7 +442,7 @@ impl StromWidgetApp {
             None
         };
         self.session_mgr.reset();
-        self.sessions_cache = self.session_mgr.list_sessions(60);
+        self.sessions_cache = self.session_mgr.list_sessions(self.sessions_shown);
         self.open_summary_view(summary, t("Session beendet", "Session ended"), true);
         if !self.expanded {
             self.toggle_expand(ctx, Some(true));
@@ -476,9 +517,6 @@ fn claim_single_instance() -> bool {
 }
 
 fn main() -> eframe::Result<()> {
-    if !claim_single_instance() {
-        return Ok(());
-    }
     let args: Vec<String> = std::env::args().collect();
     let mut self_test_dir: Option<String> = None;
     let mut demo_data = false;
@@ -494,6 +532,10 @@ fn main() -> eframe::Result<()> {
         if args[i] == "--zoom" && i + 1 < args.len() {
             zoom = args[i + 1].parse::<f32>().ok().map(|z| z.clamp(1.0, 4.0));
         }
+    }
+    // The screenshot self-test may run beside the real widget (it uses its own APPDATA).
+    if self_test_dir.is_none() && !claim_single_instance() {
+        return Ok(());
     }
 
     let mut settings = Settings::load();

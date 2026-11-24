@@ -2,7 +2,9 @@
 //!
 //! Each file adds its drawing methods to `StromWidgetApp` in an `impl` block of its own.
 
+pub(crate) mod bars;
 mod chart;
+mod net;
 mod claude_bar;
 mod flyout;
 mod history;

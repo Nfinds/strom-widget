@@ -11,7 +11,17 @@ impl StromWidgetApp {
         let Some(out_dir) = self.self_test_dir.clone() else {
             return;
         };
-        const SHOTS: [&str; 7] = ["compact", "live", "spikes", "history", "settings", "settings-bottom", "system"];
+        const SHOTS: [&str; 9] = [
+            "compact",
+            "live",
+            "spikes",
+            "history",
+            "history-bottom",
+            "network",
+            "settings",
+            "settings-bottom",
+            "system",
+        ];
 
         // A screenshot event arrived this frame: save it and move to the next view.
         let mut captured_img: Option<Arc<egui::ColorImage>> = None;
@@ -48,9 +58,14 @@ impl StromWidgetApp {
                 }
                 2 => self.active_tab = ActiveTab::Spikes,
                 3 => self.active_tab = ActiveTab::Sessions,
-                4 => self.active_tab = ActiveTab::Settings,
-                5 => self.self_test_scroll = Some(260.0),
-                6 => {
+                4 => self.self_test_scroll = Some(420.0),
+                5 => {
+                    self.self_test_scroll = Some(0.0);
+                    self.active_tab = ActiveTab::Net;
+                }
+                6 => self.active_tab = ActiveTab::Settings,
+                7 => self.self_test_scroll = Some(260.0),
+                8 => {
                     self.self_test_scroll = Some(0.0);
                     self.active_tab = ActiveTab::System;
                 }

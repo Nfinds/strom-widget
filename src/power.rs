@@ -41,6 +41,9 @@ pub struct Settings {
     /// CPU, RAM and network also in the collapsed strip (makes it about 110 px wider).
     #[serde(default)]
     pub strip_sys: bool,
+    /// Monthly budget in euros/dollars; 0 = no budget.
+    #[serde(default)]
+    pub monthly_budget: f64,
     pub size: String, // "xs" | "m"
     #[serde(default = "default_lang")]
     pub lang: String, // "de" | "en"
@@ -98,6 +101,7 @@ impl Default for Settings {
             theme: "label".to_string(),
             sys_addon: true,
             strip_sys: false,
+            monthly_budget: 0.0,
             size: "xs".to_string(),
             lang: default_lang(),
             currency: default_currency(),
@@ -212,6 +216,9 @@ impl Settings {
                     }
                     if let Some(v) = obj.get("stripSys").and_then(|x| x.as_bool()) {
                         s.strip_sys = v;
+                    }
+                    if let Some(v) = obj.get("monthlyBudget").and_then(|x| x.as_f64()) {
+                        s.monthly_budget = v.max(0.0);
                     }
                     if let Some(v) = obj.get("size").and_then(|x| x.as_str()) {
                         s.size = v.to_string();

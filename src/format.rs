@@ -78,6 +78,22 @@ pub(crate) fn fmt_bytes(b: u64) -> String {
     }
 }
 
+/// A data volume: "18,4 GB" / "640 MB" / "3,2 MB" / "420 KB".
+pub(crate) fn fmt_volume(b: f64) -> String {
+    let dec = crate::i18n::dec();
+    if b >= 1_073_741_824.0 {
+        format!("{:.1} GB", b / 1_073_741_824.0).replace('.', dec)
+    } else if b >= 10_485_760.0 {
+        format!("{:.0} MB", b / 1_048_576.0)
+    } else if b >= 1_048_576.0 {
+        format!("{:.1} MB", b / 1_048_576.0).replace('.', dec)
+    } else if b > 0.0 {
+        format!("{:.0} KB", (b / 1024.0).max(1.0))
+    } else {
+        "0 MB".to_string()
+    }
+}
+
 pub(crate) fn fmt_rate(b: f64) -> String {
     if b >= 1_048_576.0 {
         format!("{:.1} MB/s", b / 1_048_576.0).replace('.', crate::i18n::dec())

@@ -75,6 +75,7 @@ impl StromWidgetApp {
                         ActiveTab::Live => self.render_tab_live(ui, pal),
                         ActiveTab::Spikes => self.render_tab_spikes(ui, pal),
                         ActiveTab::Sessions => self.render_tab_sessions(ui, pal),
+                        ActiveTab::Net => self.render_tab_net(ui, pal),
                         ActiveTab::System => self.render_tab_system(ui, pal),
                         ActiveTab::Settings => self.render_tab_settings(ui, ctx, pal),
                         ActiveTab::Summary => self.render_tab_summary(ui, pal),
@@ -210,6 +211,7 @@ impl StromWidgetApp {
             (ActiveTab::Sessions, t("Verlauf", "History"), None),
         ];
         if self.settings.sys_addon {
+            tabs.push((ActiveTab::Net, t("Netz", "Network"), None));
             tabs.push((ActiveTab::System, "System", (port_count > 0).then_some(port_count)));
         }
 
@@ -264,7 +266,7 @@ impl StromWidgetApp {
                 }
                 self.active_tab = tab_id;
                 if tab_id == ActiveTab::Sessions {
-                    self.sessions_cache = self.session_mgr.list_sessions(60);
+                    self.sessions_cache = self.session_mgr.list_sessions(self.sessions_shown);
                 }
             }
             tx += tab_rect.width();

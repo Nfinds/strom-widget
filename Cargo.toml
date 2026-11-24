@@ -15,12 +15,16 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
-sysinfo = "0.32"
+# Only processes/memory and network. Without "multithread" there is no rayon pool: with it,
+# one worker per core woke ~250 times a second (about 4000 wakeups/s in total).
+sysinfo = { version = "0.32", default-features = false, features = ["system", "network"] }
 nvml-wrapper = "0.10"
 open = "5"
 windows = { version = "0.58", features = [
+    "Wdk_System_SystemInformation",
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Accessibility",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_Performance",
     "Win32_System_Registry",
