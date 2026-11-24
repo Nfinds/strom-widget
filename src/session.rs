@@ -2,10 +2,12 @@
 // persists continuously so a hard power-off loses at most ~30 s.
 // 100% compatible with the existing JSON format in %APPDATA%\Strom-Widget.
 
+use crate::daybook::DayBook;
+use crate::endsession::{self, EndKind, EndMarker};
 use crate::i18n::t;
 use crate::power::{ComputedReading, TopProcSample};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -177,6 +179,11 @@ pub struct LiveSample {
     pub w: f64,
     pub cpu: f64,
     pub gpu: f64,
+    /// Network download / upload in bytes/s (0 without the system add-on).
+    #[serde(default)]
+    pub rx: f64,
+    #[serde(default)]
+    pub tx: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -218,9 +225,16 @@ pub struct SessionFileArchive {
 pub struct SessionManager {
     pub sessions_dir: PathBuf,
     pub current_file: PathBuf,
+    /// Per-day totals across all sessions (`days.json`).
+    pub days: DayBook,
+    /// Summaries of all completed sessions, newest first (`sessions-index.json`), so the
+    /// history needs no reading of the archives.
+    index: Vec<SessionSummary>,
+    index_file: PathBuf,
     pub recovered: Option<SessionSummary>,
     pub s: SessionState,
-    pub live: Vec<LiveSample>,
+    /// Last ~hour of samples; a ring buffer, old samples drop off the front.
+    pub live: VecDeque<LiveSample>,
     last_t: Option<u64>,
     active_spike: Option<usize>,
     calm: u32,
@@ -234,20 +248,76 @@ impl SessionManager {
         let _ = fs::create_dir_all(&sessions_dir);
         let current_file = dir.join("current.json");
         let mut mgr = Self {
+            days: DayBook::empty(&dir),
+            index: Vec::new(),
+            index_file: dir.join("sessions-index.json"),
             sessions_dir,
             current_file,
             recovered: None,
             s: Self::fresh_state(),
-            live: Vec::new(),
+            live: VecDeque::with_capacity(LIVE_KEEP + 1),
             last_t: None,
             active_spike: None,
             calm: 0,
             above: 0,
             last_save: 0,
         };
+        // Recover first: it writes the interrupted session's archive, which the index and the
+        // one-time day book rebuild then include.
         mgr.recovered = mgr.recover_previous();
+        mgr.load_index();
+        mgr.days = DayBook::load(&dir, &mgr.sessions_dir);
         mgr.reset();
         mgr
+    }
+
+    fn archive_count(&self) -> usize {
+        fs::read_dir(&self.sessions_dir)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
+    /// Loads the session index; rebuilds it from the archives when it is missing or does not
+    /// match the number of archive files (an archive was added or deleted outside).
+    fn load_index(&mut self) {
+        let stored: Option<Vec<SessionSummary>> = fs::read_to_string(&self.index_file)
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok());
+        match stored {
+            Some(idx) if idx.len() == self.archive_count() => self.index = idx,
+            _ => {
+                self.index = fs::read_dir(&self.sessions_dir)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|e| e.ok().map(|x| x.path()))
+                    .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("json"))
+                    .filter_map(|p| {
+                        let raw = fs::read_to_string(p).ok()?;
+                        Some(serde_json::from_str::<SessionFileArchive>(&raw).ok()?.summary)
+                    })
+                    .collect();
+                self.save_index();
+            }
+        }
+        self.index.sort_by(|a, b| b.id.cmp(&a.id));
+    }
+
+    fn save_index(&self) {
+        let tmp = self.index_file.with_extension("json.tmp");
+        if let Ok(json) = serde_json::to_string(&self.index) {
+            if fs::write(&tmp, json).is_ok() {
+                let _ = fs::rename(&tmp, &self.index_file);
+            }
+        }
+    }
+
+    /// Number of completed sessions.
+    pub fn session_count(&self) -> usize {
+        self.index.len()
     }
 
     fn fresh_state() -> SessionState {
@@ -280,7 +350,15 @@ impl SessionManager {
         self.last_save = 0;
     }
 
+    /// Where the end-of-session watcher leaves its marker (see endsession.rs).
+    pub fn end_marker_path(&self) -> PathBuf {
+        self.current_file.with_file_name(endsession::MARKER_FILE)
+    }
+
+    /// Archives the session the previous run left in `current.json`. Its reason comes from the
+    /// marker Windows' shutdown or sign-out left; without one the run really ended unexpectedly.
     fn recover_previous(&self) -> Option<SessionSummary> {
+        let marker = endsession::take_marker(&self.end_marker_path());
         if !self.current_file.exists() {
             return None;
         }
@@ -290,10 +368,17 @@ impl SessionManager {
         if s.wh <= 0.01 || s.last.saturating_sub(s.start) < 60_000 {
             return None;
         }
-        Some(self.write_final(&s, t("unerwartet beendet (Strom weg oder Absturz)", "ended unexpectedly (power loss or crash)")))
+        let reason = match marker.filter(|m| endsession::marker_matches(m, s.start, s.last)) {
+            Some(EndMarker { kind: EndKind::Shutdown, .. }) => t("PC heruntergefahren oder neu gestartet", "PC shut down or restarted"),
+            Some(EndMarker { kind: EndKind::SignOut, .. }) => t("abgemeldet", "signed out"),
+            Some(EndMarker { kind: EndKind::Sleep, .. }) => t("Energiesparmodus", "sleep"),
+            None => t("unerwartet beendet (Strom weg oder Absturz)", "ended unexpectedly (power loss or crash)"),
+        };
+        Some(self.write_final(&s, reason))
     }
 
-    pub fn add(&mut self, r: &ComputedReading, price_ct: f64) -> Option<Spike> {
+    /// Adds one reading. `net` is (download, upload) in bytes/s.
+    pub fn add(&mut self, r: &ComputedReading, price_ct: f64, net: (f64, f64)) -> Option<Spike> {
         let now = now_ms();
         let dt = self
             .last_t
@@ -311,19 +396,22 @@ impl SessionManager {
             for p in &r.top {
                 *self.s.top_procs.entry(p.n.clone()).or_insert(0.0) += p.c * dt;
             }
+            self.days.add(now, dt, r.watts, price_ct, net.0, net.1);
         }
         if r.watts > self.s.peak.w {
             self.s.peak = PeakRecord { w: r.watts, t: now };
         }
 
-        self.live.push(LiveSample {
+        self.live.push_back(LiveSample {
             t: now,
             w: r.watts,
             cpu: r.parts.cpu.w,
             gpu: r.parts.gpu.w,
+            rx: net.0,
+            tx: net.1,
         });
         if self.live.len() > LIVE_KEEP {
-            self.live.remove(0);
+            self.live.pop_front();
         }
 
         let mt = (now / 60_000) * 60_000;
@@ -366,7 +454,7 @@ impl SessionManager {
             return None;
         }
         let start_idx = len.saturating_sub(BASE_WINDOW + 1);
-        let hist: Vec<f64> = self.live[start_idx..len - 1].iter().map(|x| x.w).collect();
+        let hist: Vec<f64> = self.live.range(start_idx..len - 1).map(|x| x.w).collect();
         if hist.len() < 15 {
             return None;
         }
@@ -396,14 +484,14 @@ impl SessionManager {
                     .unwrap_or(now);
                 let end_cpu = len.saturating_sub(3).max(start_idx);
                 let base_cpu = median(
-                    &self.live[start_idx..end_cpu]
-                        .iter()
+                    &self.live
+                        .range(start_idx..end_cpu)
                         .map(|x| x.cpu)
                         .collect::<Vec<_>>(),
                 );
                 let base_gpu = median(
-                    &self.live[start_idx..end_cpu]
-                        .iter()
+                    &self.live
+                        .range(start_idx..end_cpu)
                         .map(|x| x.gpu)
                         .collect::<Vec<_>>(),
                 );
@@ -496,6 +584,9 @@ impl SessionManager {
 
     pub fn save(&mut self) {
         self.last_save = now_ms();
+        if self.days.is_dirty() {
+            self.days.flush();
+        }
         let tmp = self.current_file.with_extension("json.tmp");
         if let Ok(json) = serde_json::to_string(&self.s) {
             if fs::write(&tmp, json).is_ok() {
@@ -560,31 +651,52 @@ impl SessionManager {
     pub fn finalize(&mut self, reason: &str) -> SessionSummary {
         let summary = self.write_final(&self.s, reason);
         let _ = fs::remove_file(&self.current_file);
+        self.index.insert(0, summary.clone());
+        self.save_index();
+        self.days.flush();
         summary
+    }
+
+    /// "Quit" in the panel: archive the session now, with the same minimum as the recovery at
+    /// the next start (shorter ones are dropped there, so saving is enough).
+    pub fn end_on_quit(&mut self) {
+        if self.s.wh > 0.01 && self.dur_s() >= 60.0 {
+            self.finalize(t("Widget beendet", "widget closed"));
+            // A second close event must not archive the same session again.
+            self.reset();
+        } else {
+            self.save();
+        }
+    }
+
+    /// The PC slept since the last sample: archive the session as it was before sleep (its end
+    /// is the last sample) and start a new one. Too short ones are dropped, as on recovery.
+    pub fn split_after_sleep(&mut self) {
+        if self.s.wh > 0.01 && self.dur_s() >= 60.0 {
+            self.finalize(t("Energiesparmodus", "sleep"));
+        } else {
+            let _ = fs::remove_file(&self.current_file);
+        }
+        self.reset();
+    }
+
+    /// Time of the current session's last sample (ms).
+    pub fn last_sample(&self) -> u64 {
+        self.s.last
+    }
+
+    /// Running time of the current session in seconds (cheap, for per-frame labels).
+    pub fn dur_s(&self) -> f64 {
+        (self.s.last.saturating_sub(self.s.start)) as f64 / 1000.0
     }
 
     pub fn current_summary(&self) -> SessionSummary {
         self.summary_of(&self.s, "l\u{00e4}uft")
     }
 
+    /// The newest `limit` completed sessions, from the index (no file reads).
     pub fn list_sessions(&self, limit: usize) -> Vec<SessionSummary> {
-        let mut files: Vec<PathBuf> = fs::read_dir(&self.sessions_dir)
-            .ok()
-            .into_iter()
-            .flatten()
-            .filter_map(|e| e.ok().map(|x| x.path()))
-            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("json"))
-            .collect();
-        files.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
-        files
-            .into_iter()
-            .take(limit)
-            .filter_map(|p| {
-                let raw = fs::read_to_string(p).ok()?;
-                let arch: SessionFileArchive = serde_json::from_str(&raw).ok()?;
-                Some(arch.summary)
-            })
-            .collect()
+        self.index.iter().take(limit).cloned().collect()
     }
 
     pub fn load_session_detail(&self, id: &str) -> Option<SessionFileArchive> {

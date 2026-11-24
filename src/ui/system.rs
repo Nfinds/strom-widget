@@ -1,12 +1,12 @@
 //! System & Ports tab: local web interfaces, listening ports and the biggest RAM users.
 
 use crate::StromWidgetApp;
-use crate::format::fmt_bytes;
+use crate::format::{fmt_bytes, fmt_rate};
 use crate::i18n::t;
-use crate::theme::{double_bezel_card, draw_diag_arrow_icon, draw_status_led, ThemePalette};
+use crate::theme::{card, draw_diag_arrow_icon, draw_status_led, pct_color, section_title, ThemePalette};
 use crate::ui::draw_meter_bar;
 use eframe::egui::{
-    self, Align, FontId, Layout, Pos2, Rect, RichText, Rounding, Sense, Stroke, Vec2,
+    self, Align, Color32, FontId, Layout, Pos2, Rect, RichText, Rounding, Sense, Stroke, Vec2,
 };
 
 impl StromWidgetApp {
@@ -14,29 +14,48 @@ impl StromWidgetApp {
     // TAB 4: SYSTEM & PORTS (Web UIs, All Listening TCP Ports + PID, Top RAM)
     // =========================================================================
     pub(crate) fn render_tab_system(&mut self, ui: &mut egui::Ui, pal: &ThemePalette) {
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(t("Erkannte Web-Oberfl\u{00e4}chen (HTTP/HTTPS)", "Detected web interfaces (HTTP/HTTPS)"))
-                    .font(FontId::proportional(11.5))
-                    .strong()
-                    .color(pal.ink_muted),
-            );
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label(
-                    RichText::new(if self.sys_view.web.is_empty() {
-                        t("keine aktiv", "none active").to_string()
-                    } else {
-                        tr!("{} erreichbar", "{} reachable", self.sys_view.web.len())
-                    })
-                    .font(FontId::proportional(11.0))
-                    .color(pal.action),
-                );
-            });
+        // CPU, RAM, download and upload: four figures with a thin bar each.
+        let figures = [
+            ("CPU", format!("{:.0} %", self.sys_view.cpu), (self.sys_view.cpu / 100.0) as f32, pct_color(self.sys_view.cpu)),
+            ("RAM", format!("{:.0} %", self.sys_view.ram), (self.sys_view.ram / 100.0) as f32, pct_color(self.sys_view.ram)),
+            (
+                t("\u{2193} Download", "\u{2193} Download"),
+                fmt_rate(self.sys_view.down),
+                ((self.sys_view.down / 5_242_880.0) as f32).clamp(0.0, 1.0),
+                Color32::from_rgb(0x5A, 0xA9, 0xFF),
+            ),
+            (
+                t("\u{2191} Upload", "\u{2191} Upload"),
+                fmt_rate(self.sys_view.up),
+                ((self.sys_view.up / 2_097_152.0) as f32).clamp(0.0, 1.0),
+                Color32::from_rgb(0xB4, 0x8C, 0xFF),
+            ),
+        ];
+        ui.columns(4, |cols| {
+            for (i, (lbl, val, share, col)) in figures.iter().enumerate() {
+                let ui = &mut cols[i];
+                ui.spacing_mut().item_spacing.y = 1.0;
+                ui.label(RichText::new(*lbl).font(FontId::proportional(10.5)).color(pal.ink_muted));
+                ui.label(RichText::new(val).font(FontId::proportional(15.0)).strong().color(pal.ink));
+                let (bar, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 3.0), Sense::hover());
+                draw_meter_bar(ui.painter(), bar, *share, *col, pal.rule);
+            }
         });
-        ui.add_space(4.0);
+        ui.add_space(16.0);
+
+        section_title(
+            ui,
+            pal,
+            t("Web-Oberfl\u{00e4}chen", "Web interfaces"),
+            &if self.sys_view.web.is_empty() {
+                t("keine aktiv", "none active").to_string()
+            } else {
+                tr!("{} erreichbar", "{} reachable", self.sys_view.web.len())
+            },
+        );
 
         if self.sys_view.web.is_empty() {
-            double_bezel_card(ui, pal, 10.0, Vec2::new(10.0, 8.0), |ui| {
+            card(ui, pal, 10.0, Vec2::new(10.0, 8.0), |ui| {
                 ui.label(
                     RichText::new(
                         t("Gerade antwortet kein lokaler Port mit einer Web-Oberfl\u{00e4}che. Sobald ein Server startet, erscheint er hier klickbar.", "No local port is currently answering with a web interface. As soon as a server starts, it shows up here as a link."),
@@ -176,46 +195,26 @@ impl StromWidgetApp {
             }
         }
 
-        ui.add_space(8.0);
+        ui.add_space(12.0);
 
         // 2. All Listening Ports & owning processes
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(tr!(
-                    "Belegte Ports & Dienste ({})", "Used ports & services ({})",
-                    self.sys_view.all_ports.len()
-                ))
-                .font(FontId::proportional(11.5))
-                .strong()
-                .color(pal.ink_muted),
-            );
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let toggle_txt = if self.show_all_ports {
-                    t("Ausblenden", "Hide")
-                } else {
-                    t("Alle anzeigen", "Show all")
-                };
-                if ui
-                    .add(
-                        egui::Button::new(
-                            RichText::new(toggle_txt)
-                                .font(FontId::proportional(10.5))
-                                .color(pal.ink),
-                        )
-                        .fill(pal.card)
-                        .stroke(Stroke::new(1.0_f32, pal.rule))
-                        .rounding(Rounding::same(5.0)),
-                    )
-                    .clicked()
-                {
-                    self.show_all_ports = !self.show_all_ports;
-                }
-            });
-        });
-        ui.add_space(4.0);
+        let toggle_txt = if self.show_all_ports {
+            t("ausblenden", "hide")
+        } else {
+            t("anzeigen", "show")
+        };
+        let toggle = section_title(
+            ui,
+            pal,
+            &tr!("Belegte Ports ({})", "Used ports ({})", self.sys_view.all_ports.len()),
+            toggle_txt,
+        );
+        if toggle.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+            self.show_all_ports = !self.show_all_ports;
+        }
 
         if self.show_all_ports && !self.sys_view.all_ports.is_empty() {
-            double_bezel_card(ui, pal, 8.0, Vec2::new(10.0, 7.0), |ui| {
+            card(ui, pal, 8.0, Vec2::new(10.0, 7.0), |ui| {
                 for p in &self.sys_view.all_ports {
                     ui.horizontal(|ui| {
                         ui.allocate_ui(Vec2::new(58.0, 17.0), |ui| {
@@ -258,76 +257,52 @@ impl StromWidgetApp {
         }
 
         // 3. Top RAM & CPU Consumers
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(t("Gr\u{00f6}\u{00df}te RAM- & CPU-Verbraucher", "Biggest RAM & CPU consumers"))
-                    .font(FontId::proportional(11.5))
-                    .strong()
-                    .color(pal.ink_muted),
-            );
-            if let Some(first) = self.sys_view.top.first() {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(
-                        RichText::new(tr!(
-                            "{} {} \u{00b7} Gesamt {:.0} %", "{} {} \u{00b7} total {:.0} %",
-                            first.title,
-                            fmt_bytes(first.mem),
-                            self.sys_view.ram
-                        ))
-                        .font(FontId::proportional(10.5))
-                        .color(pal.ink_muted),
-                    );
-                });
-            }
-        });
         ui.add_space(4.0);
+        section_title(ui, pal, t("Gr\u{00f6}\u{00df}te Programme", "Biggest programs"), t("RAM \u{00b7} CPU", "RAM \u{00b7} CPU"));
 
-        double_bezel_card(ui, pal, 8.0, Vec2::new(10.0, 8.0), |ui| {
+        card(ui, pal, 8.0, Vec2::new(10.0, 8.0), |ui| {
             let max_mem = self
                 .sys_view
                 .top
                 .first()
                 .map(|g| g.mem.max(1))
                 .unwrap_or(1) as f32;
+            // Fixed columns: name | bar | RAM | CPU, so bars and numbers line up row to row.
+            let name_w = 150.0;
+            let cpu_w = 48.0;
+            let mem_w = 64.0;
             for g in &self.sys_view.top {
-                ui.horizontal(|ui| {
-                    ui.allocate_ui(Vec2::new(148.0, 18.0), |ui| {
-                        let label = if g.count > 1 {
-                            format!("{} ({})", g.title, g.count)
-                        } else {
-                            g.title.clone()
-                        };
-                        ui.label(
-                            RichText::new(label)
-                                .font(FontId::proportional(11.5))
-                                .color(pal.ink),
-                        );
-                    });
+                let (row, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 20.0), Sense::hover());
+                let cy = row.center().y;
+                let label = if g.count > 1 {
+                    format!("{} ({})", g.title, g.count)
+                } else {
+                    g.title.clone()
+                };
+                ui.painter()
+                    .with_clip_rect(Rect::from_min_size(row.min, Vec2::new(name_w - 8.0, row.height())))
+                    .text(Pos2::new(row.left(), cy), egui::Align2::LEFT_CENTER, label, FontId::proportional(11.5), pal.ink);
 
-                    let (bar_rect, _) =
-                        ui.allocate_exact_size(Vec2::new(90.0, 7.0), Sense::hover());
-                    let share = ((g.mem as f32) / max_mem).clamp(0.0, 1.0);
-                    draw_meter_bar(ui.painter(), bar_rect, share, pal.action, pal.rule);
+                let bar_left = row.left() + name_w;
+                let bar_right = row.right() - cpu_w - mem_w - 10.0;
+                let bar_rect = Rect::from_min_max(Pos2::new(bar_left, cy - 3.0), Pos2::new(bar_right.max(bar_left + 20.0), cy + 3.0));
+                let share = ((g.mem as f32) / max_mem).clamp(0.0, 1.0);
+                draw_meter_bar(ui.painter(), bar_rect, share, pal.action, pal.rule);
 
-                    ui.allocate_ui(Vec2::new(68.0, 18.0), |ui| {
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.label(
-                                RichText::new(fmt_bytes(g.mem))
-                                    .font(FontId::proportional(11.0))
-                                    .strong()
-                                    .color(pal.ink),
-                            );
-                        });
-                    });
-
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(
-                            RichText::new(format!("{:.1} %", g.cpu))
-                                .font(FontId::proportional(11.0))
-                                .color(pal.ink_muted),
-                        );
-                    });
-                });
+                ui.painter().text(
+                    Pos2::new(row.right() - cpu_w, cy),
+                    egui::Align2::RIGHT_CENTER,
+                    fmt_bytes(g.mem),
+                    FontId::proportional(11.5),
+                    pal.ink,
+                );
+                ui.painter().text(
+                    Pos2::new(row.right(), cy),
+                    egui::Align2::RIGHT_CENTER,
+                    format!("{:.1} %", g.cpu).replace('.', crate::i18n::dec()),
+                    FontId::proportional(11.0),
+                    pal.ink_muted,
+                );
             }
         });
 

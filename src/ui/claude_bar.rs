@@ -5,7 +5,7 @@ use crate::StromWidgetApp;
 use crate::claude::{ask_async, ClaudeStatus};
 use crate::i18n::t;
 use crate::session::{compact_minute, CompactMinute, Spike};
-use crate::theme::{double_bezel_card, draw_close_icon, draw_send_icon, ThemePalette};
+use crate::theme::{card, draw_close_icon, draw_send_icon, ThemePalette};
 use eframe::egui::{
     self, Align, Color32, FontId, Key, Layout, Margin, RichText, Rounding, Sense, Stroke, Vec2,
 };
@@ -16,12 +16,17 @@ impl StromWidgetApp {
     // CLAUDE ANSWER DRAWER & PROMPT BAR
     // =========================================================================
     pub(crate) fn render_claude_answer_box(&mut self, ui: &mut egui::Ui, pal: &ThemePalette) {
-        let st_snapshot = self.claude_status.lock().unwrap().clone();
+        // A poisoned lock (a panic in the asking thread) counts as "nothing to show", never as a crash.
+        let st_snapshot = self
+            .claude_status
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or(ClaudeStatus::Idle);
         if matches!(st_snapshot, ClaudeStatus::Idle) {
             return;
         }
 
-        double_bezel_card(ui, pal, 8.0, Vec2::new(10.0, 7.0), |ui| {
+        card(ui, pal, 8.0, Vec2::new(10.0, 7.0), |ui| {
             ui.horizontal(|ui| {
                 let lbl = match &st_snapshot {
                     ClaudeStatus::Asking { label, .. } => tr!("Claude \u{00b7} {}", "Claude \u{00b7} {}", label),
@@ -40,7 +45,9 @@ impl StromWidgetApp {
                         ui.allocate_exact_size(Vec2::new(18.0, 18.0), Sense::click());
                     draw_close_icon(ui.painter(), x_rect.center(), 7.0, pal.ink_muted);
                     if x_resp.clicked() {
-                        *self.claude_status.lock().unwrap() = ClaudeStatus::Idle;
+                        if let Ok(mut st) = self.claude_status.lock() {
+                            *st = ClaudeStatus::Idle;
+                        }
                     }
                 });
             });

@@ -9,7 +9,14 @@ use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use sysinfo::{Networks, ProcessesToUpdate, System};
+use crate::procs::ProcTable;
+use sysinfo::{MemoryRefreshKind, Networks, System};
+
+/// Ticks (~1.8 s each) between port scans while nobody looks at the System tab; often enough
+/// to keep the port count on the tab roughly current.
+const PORT_SCAN_IDLE_TICKS: u64 = 32;
+/// Ticks between port scans while the System tab is open.
+const PORT_SCAN_OPEN_TICKS: u64 = 4;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::NetworkManagement::IpHelper::{
@@ -59,6 +66,9 @@ pub struct SysMonView {
     pub ram: f64,
     pub down: f64,
     pub up: f64,
+    /// Name of the network interface with the most traffic right now.
+    #[serde(default)]
+    pub net_if: String,
     pub top: Vec<RamGroup>,
     pub web: Vec<WebServiceInfo>,
     pub all_ports: Vec<ListeningPortEntry>,
@@ -72,6 +82,8 @@ struct CachedHttpProbe {
 
 pub struct HardwareSampler {
     sys: System,
+    /// Processes come from one system call instead of sysinfo (see procs.rs).
+    procs: ProcTable,
     networks: Networks,
     nvml: Option<Nvml>,
     pdh_query: isize,
@@ -79,6 +91,8 @@ pub struct HardwareSampler {
     util_counter: Option<isize>,
     last_net_time: Instant,
     tick_count: u64,
+    /// Whether the previous tick had the System tab open (scan at once when it opens).
+    ports_were_wanted: bool,
     http_cache: Arc<Mutex<HashMap<(u32, u16), CachedHttpProbe>>>,
     pub last_sys_view: SysMonView,
 }
@@ -87,8 +101,10 @@ unsafe impl Send for HardwareSampler {}
 
 impl HardwareSampler {
     pub fn new() -> Self {
-        let mut sys = System::new_all();
-        sys.refresh_all();
+        // sysinfo only for CPU load, core count and total memory; processes come from ProcTable.
+        let mut sys = System::new();
+        sys.refresh_cpu_usage();
+        sys.refresh_memory_specifics(MemoryRefreshKind::new().with_ram());
         let networks = Networks::new_with_refreshed_list();
         let nvml = Nvml::init().ok();
 
@@ -124,6 +140,7 @@ impl HardwareSampler {
 
         Self {
             sys,
+            procs: ProcTable::new(),
             networks,
             nvml,
             pdh_query,
@@ -131,16 +148,17 @@ impl HardwareSampler {
             util_counter,
             last_net_time: Instant::now(),
             tick_count: 0,
+            ports_were_wanted: false,
             http_cache: Arc::new(Mutex::new(HashMap::new())),
             last_sys_view: SysMonView::default(),
         }
     }
 
-    pub fn sample(&mut self, sys_addon: bool) -> RawSensorSample {
-        // 1. Refresh CPU & Processes
+    /// One measurement. `ports_wanted`: the System tab is open, so scan ports more often.
+    pub fn sample(&mut self, sys_addon: bool, ports_wanted: bool) -> RawSensorSample {
+        // 1. CPU load and memory; the processes follow in step 4
         self.sys.refresh_cpu_usage();
-        self.sys.refresh_memory();
-        self.sys.refresh_processes(ProcessesToUpdate::All, true);
+        self.sys.refresh_memory_specifics(MemoryRefreshKind::new().with_ram());
 
         // 2. Query PDH (RAPL Power in mW -> W, and Processor Utility %)
         let mut cpu_w: Option<f64> = None;
@@ -220,23 +238,26 @@ impl HardwareSampler {
         let mut mem_by_name: HashMap<String, (usize, u64)> = HashMap::new();
         let mut pid_to_name: HashMap<u32, String> = HashMap::new();
 
-        for (pid, proc_info) in self.sys.processes() {
-            let raw_name = proc_info.name().to_string_lossy().to_string();
+        for proc_info in self.procs.sample() {
+            if proc_info.name.is_empty() {
+                continue; // the idle process
+            }
+            let raw_name = proc_info.name;
             let clean_name = raw_name
                 .strip_suffix(".exe")
                 .or_else(|| raw_name.strip_suffix(".EXE"))
                 .unwrap_or(&raw_name)
                 .to_string();
-            pid_to_name.insert(pid.as_u32(), clean_name.clone());
+            pid_to_name.insert(proc_info.pid, clean_name.clone());
 
             if skip_names.contains(clean_name.as_str()) {
                 continue;
             }
-            let c = (proc_info.cpu_usage() as f64) / num_cores;
+            let c = proc_info.cpu / num_cores;
             if c > 0.05 {
                 *cpu_by_name.entry(clean_name.clone()).or_insert(0.0) += c;
             }
-            let m = proc_info.memory();
+            let m = proc_info.mem;
             if m > 0 {
                 let entry = mem_by_name.entry(clean_name).or_insert((0, 0));
                 entry.0 += 1;
@@ -283,12 +304,20 @@ impl HardwareSampler {
 
             let mut best_down = 0.0;
             let mut best_up = 0.0;
-            for (_if_name, net_data) in &self.networks {
+            let mut best_if = None;
+            for (if_name, net_data) in &self.networks {
                 let d = (net_data.received() as f64) / dt;
                 let u = (net_data.transmitted() as f64) / dt;
                 if d + u > best_down + best_up {
                     best_down = d;
                     best_up = u;
+                    best_if = Some(if_name);
+                }
+            }
+            // Keep the last name while idle, so the label does not flicker.
+            if let Some(name) = best_if {
+                if self.last_sys_view.net_if != *name {
+                    self.last_sys_view.net_if = name.clone();
                 }
             }
 
@@ -321,13 +350,16 @@ impl HardwareSampler {
                 self.last_sys_view.top = ram_groups;
             }
 
-            // Every 4 ticks (~8s), refresh listening TCP ports & HTTP Web UI probe
-            if self.tick_count.is_multiple_of(4) {
+            // Listening TCP ports & HTTP web UI probes: every ~7 s while the System tab is
+            // open, otherwise about once a minute.
+            let every = if ports_wanted { PORT_SCAN_OPEN_TICKS } else { PORT_SCAN_IDLE_TICKS };
+            if self.tick_count.is_multiple_of(every) || (ports_wanted && !self.ports_were_wanted) {
                 self.refresh_ports_and_web(&pid_to_name);
             }
         }
 
         self.tick_count += 1;
+        self.ports_were_wanted = ports_wanted;
 
         RawSensorSample {
             cpu_w,

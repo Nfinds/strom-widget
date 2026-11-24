@@ -3,7 +3,7 @@
 use crate::{autostart, i18n, theme, StromWidgetApp};
 use crate::i18n::t;
 use crate::power::parse_price;
-use crate::theme::{double_bezel_card, ThemePalette, THEMES};
+use crate::theme::{card, ThemePalette, THEMES};
 use eframe::egui::{self, Align, Color32, FontId, Layout, RichText, Rounding, Stroke, Vec2};
 
 impl StromWidgetApp {
@@ -16,7 +16,7 @@ impl StromWidgetApp {
         ctx: &egui::Context,
         pal: &ThemePalette,
     ) {
-        double_bezel_card(ui, pal, 10.0, Vec2::new(12.0, 10.0), |ui| {
+        card(ui, pal, 10.0, Vec2::new(12.0, 10.0), |ui| {
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(t("Position", "Placement"))
@@ -144,6 +144,33 @@ impl StromWidgetApp {
                         } else {
                             self.price_input_valid = false;
                         }
+                    }
+                });
+            });
+
+            ui.add_space(6.0);
+
+            // 2b. Monthly budget (0 or empty = off)
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(tr!("Monatsbudget ({})", "Monthly budget ({})", if i18n::is_usd() { "$" } else { "\u{20ac}" }))
+                        .font(FontId::proportional(12.0))
+                        .color(pal.ink),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(
+                        RichText::new(if self.settings.monthly_budget > 0.0 { t("im Verlauf", "in History") } else { t("aus", "off") })
+                            .font(FontId::proportional(11.0))
+                            .color(pal.ink_muted),
+                    );
+                    let resp = ui.add_sized(
+                        [85.0, 22.0],
+                        egui::TextEdit::singleline(&mut self.budget_buf).hint_text("0"),
+                    );
+                    if resp.changed() {
+                        let v = parse_price(&self.budget_buf).unwrap_or(0.0).max(0.0);
+                        self.settings.monthly_budget = (v * 100.0).round() / 100.0;
+                        self.settings.save();
                     }
                 });
             });
@@ -382,6 +409,17 @@ impl StromWidgetApp {
                     t("System-Addon (CPU, RAM, Netzwerk, Ports & Web-UIs)", "System add-on (CPU, RAM, network, ports & web UIs)"),
                 )
                 .changed()
+            {
+                self.settings.save();
+                self.sync_window_geometry(ctx, true);
+            }
+            if self.settings.sys_addon
+                && ui
+                    .checkbox(
+                        &mut self.settings.strip_sys,
+                        t("CPU, RAM und Netz auch in der Leiste zeigen", "Also show CPU, RAM and network in the strip"),
+                    )
+                    .changed()
             {
                 self.settings.save();
                 self.sync_window_geometry(ctx, true);

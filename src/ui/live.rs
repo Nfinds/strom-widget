@@ -1,288 +1,216 @@
-//! Live tab: energy label scale, breakdown by component and the session facts.
+//! "Now" tab: power chart, where the watts go, the running session and its latest spikes.
 
-use crate::{i18n, StromWidgetApp};
-use crate::format::{fmt_clock, fmt_dur, fmt_euro};
+use crate::{i18n, ActiveTab, StromWidgetApp};
+use crate::format::{fmt_clock, fmt_euro, fmt_money_ct};
 use crate::i18n::t;
 use crate::power::class_of;
-use crate::theme::{
-    class_bg_color, class_number_color, double_bezel_card, draw_class_arrow, load_color,
-    number_color, ThemePalette, CLASSES,
-};
-use crate::ui::draw_meter_bar;
-use eframe::egui::{
-    self, Align, Color32, FontId, Layout, Margin, Pos2, Rect, RichText, Rounding, Sense, Stroke,
-    Vec2,
-};
+use crate::theme::{draw_legend_dot, faint, kpi, number_color, section_title, ThemePalette};
+use eframe::egui::{self, Color32, CursorIcon, FontId, Pos2, Rect, RichText, Rounding, Sense, Vec2};
+
+/// Gap between the segments of the stacked bar.
+const SEG_GAP: f32 = 2.0;
 
 impl StromWidgetApp {
-    // =========================================================================
-    // TAB 1: LIVE (EU Energy Label A-G Scale + Parts Breakdown + Fact Cards)
-    // =========================================================================
     pub(crate) fn render_tab_live(&mut self, ui: &mut egui::Ui, pal: &ThemePalette) {
-        // 1. Signature EU Energy Label A-G Scale with Pointer
-        double_bezel_card(ui, pal, 10.0, Vec2::new(10.0, 8.0), |ui| {
-            let cur_cls = class_of(self.reading.watts);
-            let avail_w = ui.available_width();
-            let gap = 4.0;
-            let arrow_w = (avail_w - gap * 6.0) / 7.0;
-            let row_h = 26.0;
+        self.render_chart_section(ui, pal);
+        ui.add_space(16.0);
+        self.render_breakdown(ui, pal);
+        ui.add_space(16.0);
+        self.render_session_facts(ui, pal);
+        ui.add_space(16.0);
+        self.render_spike_overview(ui, pal);
+        ui.add_space(14.0);
 
-            let (scale_rect, _) =
-                ui.allocate_exact_size(Vec2::new(avail_w, row_h), Sense::hover());
+        ui.label(
+            RichText::new(tr!(
+                "Gemessen: CPU-Paket (RAPL), Grafikkarte (NVML). Wirkungsgrad {:.0} % \u{00b7} Tarif {} {}/kWh.", "Measured: CPU package (RAPL), graphics card (NVML). Efficiency {:.0} % \u{00b7} Tariff {} {}/kWh.",
+                self.reading.eff * 100.0,
+                format!("{:.1}", self.settings.price_ct).replace('.', i18n::dec()),
+                i18n::cent_unit()
+            ))
+            .font(FontId::proportional(10.5))
+            .color(faint(pal)),
+        );
+    }
 
-            for (i, &(_, k)) in CLASSES.iter().enumerate() {
-                let is_cur = k == cur_cls;
-                let h = if is_cur { 25.0 } else { 18.0 };
-                let y0 = scale_rect.top() + (row_h - h) * 0.5;
-                let x0 = scale_rect.left() + (i as f32) * (arrow_w + gap);
-                let r = Rect::from_min_size(Pos2::new(x0, y0), Vec2::new(arrow_w, h));
-                draw_class_arrow(
-                    ui.painter(),
-                    r,
-                    7.0,
-                    class_bg_color(k),
-                    k,
-                    Color32::from_rgb(0x0B, 0x0C, 0x0E),
-                    if is_cur { 13.5 } else { 11.0 },
+    /// One stacked bar for the parts, a two-column legend and the measured/estimated line.
+    fn render_breakdown(&mut self, ui: &mut egui::Ui, pal: &ThemePalette) {
+        let r = &self.reading;
+        let parts: [(&str, f64, bool, Color32); 5] = [
+            (t("Prozessor", "Processor"), r.parts.cpu.w, r.parts.cpu.src == "gem.", pal.action),
+            (t("Grafikkarte", "Graphics card"), r.parts.gpu.w, r.parts.gpu.src == "gem.", Color32::from_rgb(0x5A, 0xA9, 0xFF)),
+            (t("Restsystem", "Rest of system"), r.parts.rest.w, false, pal.ink_muted),
+            (t("Monitore", "Monitors"), r.parts.mon.w, false, Color32::from_rgb(0xB4, 0x8C, 0xFF)),
+            (t("Netzteilverlust", "PSU loss"), r.parts.psu.w, false, pal.rule_strong),
+        ];
+
+        section_title(
+            ui,
+            pal,
+            &tr!("Wohin die {:.0} W gehen", "Where the {:.0} W go", r.watts),
+            t("\u{25cf} gemessen  \u{25cb} gesch\u{00e4}tzt", "\u{25cf} measured  \u{25cb} estimated"),
+        );
+
+        let total: f64 = parts.iter().map(|p| p.1.max(0.0)).sum::<f64>().max(1.0);
+        let bar_w = ui.available_width();
+        let (bar_rect, _) = ui.allocate_exact_size(Vec2::new(bar_w, 10.0), Sense::hover());
+        let shown = parts.iter().filter(|p| p.1 > 0.5).count().max(1);
+        let usable = bar_w - SEG_GAP * (shown as f32 - 1.0);
+        let mut x = bar_rect.left();
+        for (name, w, _, col) in parts.iter().filter(|p| p.1 > 0.5) {
+            let seg_w = (usable * (*w / total) as f32).max(2.0);
+            let seg = Rect::from_min_size(Pos2::new(x, bar_rect.top()), Vec2::new(seg_w, bar_rect.height()));
+            ui.painter().rect_filled(seg, Rounding::same(2.5), *col);
+            ui.interact(seg, egui::Id::new(("seg", *name)), Sense::hover())
+                .on_hover_text(format!("{} {:.0} W", name, w));
+            x += seg_w + SEG_GAP;
+        }
+
+        ui.add_space(8.0);
+        ui.columns(2, |cols| {
+            for (i, (name, w, measured, col)) in parts.iter().enumerate() {
+                let ui = &mut cols[i % 2];
+                let (row, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 18.0), Sense::hover());
+                draw_legend_dot(ui.painter(), Pos2::new(row.left() + 4.0, row.center().y), *col, *measured);
+                ui.painter().text(
+                    Pos2::new(row.left() + 14.0, row.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    *name,
+                    FontId::proportional(11.5),
+                    pal.ink_muted,
+                );
+                ui.painter().text(
+                    Pos2::new(row.right() - 4.0, row.center().y),
+                    egui::Align2::RIGHT_CENTER,
+                    format!("{:.0} W", w),
+                    FontId::proportional(11.5),
+                    pal.ink,
                 );
             }
-
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                // Draw small vector right triangle pointer
-                let (p_rect, _) = ui.allocate_exact_size(Vec2::new(8.0, 12.0), Sense::hover());
-                let c = p_rect.center();
-                ui.painter().add(egui::Shape::convex_polygon(
-                    vec![
-                        Pos2::new(c.x - 3.0, c.y - 4.0),
-                        Pos2::new(c.x + 3.0, c.y),
-                        Pos2::new(c.x - 3.0, c.y + 4.0),
-                    ],
-                    class_number_color(cur_cls),
-                    Stroke::NONE,
-                ));
-
-                ui.label(
-                    RichText::new(tr!("Klasse {}", "Class {}", cur_cls))
-                        .font(FontId::proportional(12.0))
-                        .strong()
-                        .color(class_number_color(cur_cls)),
-                );
-                ui.label(
-                    RichText::new(tr!("jetzt {:.0} W", "now {:.0} W", self.reading.watts))
-                        .font(FontId::proportional(12.0))
-                        .strong()
-                        .color(pal.ink),
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(
-                        RichText::new(t("A <150 W \u{00b7} +100 W/Klasse \u{00b7} G \u{2265}650 W", "A <150 W \u{00b7} +100 W/class \u{00b7} G \u{2265}650 W"))
-                            .font(FontId::proportional(10.0))
-                            .color(pal.ink_muted),
-                    );
-                });
-            });
         });
 
-        ui.add_space(7.0);
+        ui.add_space(4.0);
+        let diff_pct = if r.measured_w > 0.0 {
+            ((r.estimated_w - r.measured_w) / r.measured_w) * 100.0
+        } else {
+            0.0
+        };
+        let sign = if diff_pct >= 0.0 { "+" } else { "\u{2212}" };
+        let gpu_str = r.gpu_util.map(|u| format!("{:.0} %", u)).unwrap_or_else(|| "\u{2013}".to_string());
+        let temp_str = r.gpu_temp.map(|t| format!(", {:.0} \u{00b0}C", t)).unwrap_or_default();
+        let fg_str = r
+            .fg
+            .as_ref()
+            .map(|f| tr!(" \u{00b7} Fokus: {}", " \u{00b7} Focus: {}", f))
+            .unwrap_or_default();
+        ui.label(
+            RichText::new(tr!(
+                "Sch\u{00e4}tzung {:.0} W ({}{:.0} %) \u{00b7} CPU {:.0} % \u{00b7} GPU {}{}{}", "Estimate {:.0} W ({}{:.0} %) \u{00b7} CPU {:.0} % \u{00b7} GPU {}{}{}",
+                r.estimated_w,
+                sign,
+                diff_pct.abs(),
+                r.util,
+                gpu_str,
+                temp_str,
+                fg_str
+            ))
+            .font(FontId::proportional(11.0))
+            .color(pal.ink_muted),
+        );
+    }
 
-        // 2. Parts Breakdown Table (CPU, GPU, Restsystem, Netzteilverlust, Monitore, Steckdose)
-        double_bezel_card(ui, pal, 10.0, Vec2::new(11.0, 8.0), |ui| {
-            let total_w = self.reading.watts.max(1.0);
-            let rows = [
-                (
-                    t("Prozessor (CPU)", "Processor (CPU)"),
-                    self.reading.parts.cpu.w,
-                    self.reading.parts.cpu.src.as_str(),
-                    false,
-                ),
-                (
-                    t("Grafikkarte (GPU)", "Graphics card (GPU)"),
-                    self.reading.parts.gpu.w,
-                    self.reading.parts.gpu.src.as_str(),
-                    false,
-                ),
-                (
-                    t("Restsystem", "Rest of system"),
-                    self.reading.parts.rest.w,
-                    self.reading.parts.rest.src.as_str(),
-                    false,
-                ),
-                (
-                    t("Netzteilverlust", "PSU loss"),
-                    self.reading.parts.psu.w,
-                    self.reading.parts.psu.src.as_str(),
-                    false,
-                ),
-                (
-                    t("Monitore", "Monitors"),
-                    self.reading.parts.mon.w,
-                    self.reading.parts.mon.src.as_str(),
-                    false,
-                ),
-                (
-                    t("Steckdose (Gesamt)", "Wall socket (total)"),
-                    self.reading.watts,
-                    if self.settings.mode == "measured" {
-                        "Summe"
-                    } else {
-                        t("Sch\u{00e4}tzung", "Estimate")
-                    },
-                    true,
-                ),
-            ];
+    /// Cost, average and peak of the running session, three across.
+    fn render_session_facts(&mut self, ui: &mut egui::Ui, pal: &ThemePalette) {
+        let s = &self.session_mgr.s;
+        let dur_s = self.session_mgr.dur_s();
+        // Below a minute the average is mostly start-up noise.
+        let (avg_txt, avg_sub) = if dur_s >= 60.0 {
+            let avg_w = s.wh / (dur_s / 3600.0);
+            (format!("{:.0} W", avg_w), tr!("Klasse {}", "Class {}", class_of(avg_w)))
+        } else {
+            ("\u{2013}".to_string(), t("ab 1 min", "after 1 min").to_string())
+        };
+        let kwh = format!("{:.2} kWh", s.wh / 1000.0).replace('.', i18n::dec());
+        let (cost, peak_w, peak_t) = (s.cost, s.peak.w, s.peak.t);
 
-            for (label, w_val, src, is_total) in rows {
-                if is_total {
-                    ui.add_space(2.0);
-                    ui.separator();
-                    ui.add_space(2.0);
-                }
-                ui.horizontal(|ui| {
-                    ui.allocate_ui(Vec2::new(132.0, 17.0), |ui| {
-                        ui.label(
-                            RichText::new(label)
-                                .font(FontId::proportional(11.5))
-                                .color(if is_total { pal.ink } else { pal.ink_muted })
-                                .strong(),
-                        );
-                    });
-                    ui.allocate_ui(Vec2::new(54.0, 17.0), |ui| {
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.label(
-                                RichText::new(format!("{:.0} W", w_val))
-                                    .font(FontId::proportional(12.0))
-                                    .strong()
-                                    .color(if is_total {
-                                        number_color(w_val)
-                                    } else {
-                                        pal.ink
-                                    }),
-                            );
-                        });
-                    });
-                    ui.allocate_ui(Vec2::new(66.0, 17.0), |ui| {
-                        let src_full = match src {
-                            "gem." => t("gemessen", "measured"),
-                            "aus" => t("aus", "off"),
-                            "Summe" => t("Summe", "Sum"),
-                            _ => t("gesch\u{00e4}tzt", "estimated"),
-                        };
-                        ui.label(
-                            RichText::new(src_full)
-                                .font(FontId::proportional(10.5))
-                                .color(if src == "gem." {
-                                    pal.action
-                                } else {
-                                    pal.ink_muted
-                                }),
-                        );
-                    });
+        section_title(ui, pal, t("Diese Session", "This session"), &tr!("seit {}", "since {}", fmt_clock(s.start)));
+        ui.columns(3, |cols| {
+            kpi(&mut cols[0], pal, t("Kosten", "Cost"), &fmt_euro(cost), &kwh, None);
+            kpi(&mut cols[1], pal, t("Durchschnitt", "Average"), &avg_txt, &avg_sub, None);
+            kpi(
+                &mut cols[2],
+                pal,
+                t("Spitze", "Peak"),
+                &format!("{:.0} W", peak_w),
+                &tr!("um {}", "at {}", fmt_clock(peak_t)),
+                None,
+            );
+        });
+    }
 
-                    let bar_w = ui.available_width().max(40.0);
-                    let (bar_rect, _) =
-                        ui.allocate_exact_size(Vec2::new(bar_w, 7.5), Sense::hover());
-                    let share = (w_val / total_w).clamp(0.0, 1.0) as f32;
-                    let fill_col = if is_total {
-                        load_color(w_val)
-                    } else {
-                        pal.action
-                    };
-                    draw_meter_bar(ui.painter(), bar_rect, share, fill_col, pal.rule);
-                });
-            }
+    /// The latest spikes as short rows; a click opens the full spike list at that spike.
+    fn render_spike_overview(&mut self, ui: &mut egui::Ui, pal: &ThemePalette) {
+        let total = self.session_mgr.s.spikes.len();
+        let note = if total == 0 { String::new() } else { tr!("{} \u{00b7} alle ansehen", "{} \u{00b7} see all", total) };
+        let all = section_title(ui, pal, "Spikes", &note);
+        if total > 0 && all.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+            self.open_spike_idx = None;
+            self.session_mgr.mark_seen();
+            self.active_tab = ActiveTab::Spikes;
+        }
 
-            ui.add_space(5.0);
-            let diff_pct = if self.reading.measured_w > 0.0 {
-                ((self.reading.estimated_w - self.reading.measured_w) / self.reading.measured_w)
-                    * 100.0
-            } else {
-                0.0
-            };
-            let sign = if diff_pct >= 0.0 { "+" } else { "\u{2212}" };
-            let gpu_str = self
-                .reading
-                .gpu_util
-                .map(|u| format!("{:.0} %", u))
-                .unwrap_or_else(|| "\u{2013}".to_string());
-            let temp_str = self
-                .reading
-                .gpu_temp
-                .map(|t| format!(" \u{00b7} {:.0} \u{00b0}C", t))
-                .unwrap_or_default();
-            let fg_str = self
-                .reading
-                .fg
-                .as_ref()
-                .map(|f| tr!(" \u{00b7} Fokus: {}", " \u{00b7} Focus: {}", f))
-                .unwrap_or_default();
-
+        if total == 0 {
             ui.label(
-                RichText::new(tr!(
-                    "Gemessen {:.0} W \u{00b7} Gesch\u{00e4}tzt {:.0} W \u{00b7} Abweichung {}{:.0} %\nCPU {:.0} % \u{00b7} GPU {}{}{}", "Measured {:.0} W \u{00b7} Estimated {:.0} W \u{00b7} Deviation {}{:.0} %\nCPU {:.0} % \u{00b7} GPU {}{}{}",
-                    self.reading.measured_w,
-                    self.reading.estimated_w,
-                    sign,
-                    diff_pct.abs(),
-                    self.reading.util,
-                    gpu_str,
-                    temp_str,
-                    fg_str
+                RichText::new(t(
+                    "Noch keine in dieser Session. Ein Spike ist ein Anstieg um mindestens 60 W und 35 % \u{00fc}ber die Grundlast.",
+                    "None in this session yet. A spike is a rise of at least 60 W and 35 % above the base load.",
                 ))
                 .font(FontId::proportional(11.0))
                 .color(pal.ink_muted),
             );
-        });
-
-        ui.add_space(7.0);
-
-        // 3. 6 Fact Cards in a clean 2-row x 3-column Equal-Width Layout
-        let s = self.session_mgr.current_summary();
-        let facts = [
-            (t("Seit", "Since"), fmt_clock(s.start)),
-            (t("Dauer", "Duration"), fmt_dur(s.dur_s)),
-            (t("Kosten", "Cost"), fmt_euro(s.cost)),
-            (t("Energie", "Energy"), format!("{:.2} kWh", s.wh / 1000.0).replace('.', crate::i18n::dec())),
-            (t("Durchschnitt", "Average"), format!("{:.0} W", s.avg_w)),
-            (t("Spitze", "Peak"), format!("{:.0} W", s.peak.w)),
-        ];
-
-        for row_pair in facts.chunks(3) {
-            ui.columns(3, |cols| {
-                for (c_idx, (k, v)) in row_pair.iter().enumerate() {
-                    egui::Frame::none()
-                        .fill(pal.card)
-                        .stroke(Stroke::new(1.0_f32, pal.rule))
-                        .rounding(Rounding::same(6.0))
-                        .inner_margin(Margin::symmetric(10.0, 6.0))
-                        .show(&mut cols[c_idx], |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.label(
-                                RichText::new(*k)
-                                    .font(FontId::proportional(10.5))
-                                    .color(pal.ink_muted),
-                            );
-                            ui.label(
-                                RichText::new(v)
-                                    .font(FontId::proportional(14.0))
-                                    .strong()
-                                    .color(pal.ink),
-                            );
-                        });
-                }
-            });
-            ui.add_space(5.0);
+            return;
         }
 
-        ui.label(
-            RichText::new(tr!(
-                "Nativ in Rust gemessen: CPU-Paket (RAPL PDH), Grafikkarte (NVML). Wirkungsgrad {:.0} % \u{00b7} Tarif {:.1} {}/kWh.", "Measured natively in Rust: CPU package (RAPL PDH), graphics card (NVML). Efficiency {:.0} % \u{00b7} Tariff {:.1} {}/kWh.",
-                self.reading.eff * 100.0,
-                self.settings.price_ct,
-                i18n::cent_unit()
-            ))
-            .font(FontId::proportional(10.5))
-            .color(pal.ink_muted),
-        );
+        let mut open: Option<usize> = None;
+        for idx in self.overview_spikes() {
+            let Some(sp) = self.session_mgr.s.spikes.get(idx) else { continue };
+            let row_w = ui.available_width();
+            let (row, resp) = ui.allocate_exact_size(Vec2::new(row_w, 36.0), Sense::click());
+            if resp.hovered() {
+                ui.painter().rect_filled(row.expand2(Vec2::new(4.0, 0.0)), Rounding::same(6.0), pal.hover);
+            }
+            let dot_col = if sp.seen { faint(pal) } else { number_color(sp.peak) };
+            ui.painter().circle_filled(Pos2::new(row.left() + 4.0, row.center().y), 3.5, dot_col);
+            ui.painter().text(
+                Pos2::new(row.left() + 16.0, row.center().y - 7.5),
+                egui::Align2::LEFT_CENTER,
+                tr!("{} \u{00b7} bis {:.0} W", "{} \u{00b7} up to {:.0} W", fmt_clock(sp.start), sp.peak),
+                FontId::proportional(12.0),
+                pal.ink,
+            );
+            let cause_clip = Rect::from_min_max(row.min, Pos2::new(row.right() - 70.0, row.bottom()));
+            ui.painter().with_clip_rect(cause_clip).text(
+                Pos2::new(row.left() + 16.0, row.center().y + 8.0),
+                egui::Align2::LEFT_CENTER,
+                sp.cause_line(),
+                FontId::proportional(10.5),
+                pal.ink_muted,
+            );
+            ui.painter().text(
+                Pos2::new(row.right(), row.center().y),
+                egui::Align2::RIGHT_CENTER,
+                format!("+{}", fmt_money_ct(sp.extra_ct)),
+                FontId::proportional(12.0),
+                pal.ink,
+            );
+            if resp.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                open = Some(idx);
+            }
+        }
+        if let Some(idx) = open {
+            self.open_spike_idx = Some(idx);
+            self.session_mgr.mark_seen();
+            self.active_tab = ActiveTab::Spikes;
+        }
     }
 }
