@@ -92,6 +92,7 @@ struct StromWidgetApp {
     monitor_w_bufs: Vec<String>,
 
     // Claude state
+    claude_bar_open: bool,
     claude_input: String,
     claude_status: Arc<Mutex<ClaudeStatus>>,
     claude_history: Arc<Mutex<Vec<ConvoTurn>>>,
@@ -212,6 +213,7 @@ impl StromWidgetApp {
             rest_w_buf,
             psu_w_buf,
             monitor_w_bufs,
+            claude_bar_open: false,
             claude_input: String::new(),
             claude_status: Arc::new(Mutex::new(ClaudeStatus::Idle)),
             claude_history: Arc::new(Mutex::new(Vec::new())),
@@ -281,23 +283,14 @@ impl StromWidgetApp {
 
     fn compact_dimensions(&self) -> (i32, i32) {
         if self.settings.placement == "taskbar" {
-            // Snug width for Ring Badge + Watt + ct/h + Session + CPU/RAM + Up/Down + Chevron with zero dead space
-            let w = if self.settings.sys_addon {
-                if self.settings.size == "m" { 316 } else { 302 }
-            } else if self.settings.size == "m" {
-                206
-            } else {
-                192
-            };
-            let h = 42;
-            (w, h)
+            (self.settings.taskbar_strip_width(), 42)
         } else {
             let (base_w, base_h, sys_h) = if self.settings.size == "m" {
                 (320, 68, 22)
             } else {
                 (232, 48, 18)
             };
-            let h = base_h + if self.settings.sys_addon { sys_h } else { 0 };
+            let h = base_h + if self.settings.strip_shows_sys() { sys_h } else { 0 };
             (base_w, h)
         }
     }
@@ -508,14 +501,7 @@ fn main() -> eframe::Result<()> {
     i18n::set_en(settings.lang == "en");
     i18n::set_usd(settings.currency == "USD");
     let (cw, ch) = if settings.placement == "taskbar" {
-        let w = if settings.sys_addon {
-            if settings.size == "m" { 316.0 } else { 302.0 }
-        } else if settings.size == "m" {
-            206.0
-        } else {
-            192.0
-        };
-        (w, 42.0)
+        (settings.taskbar_strip_width() as f32, 42.0)
     } else {
         (232.0, 64.0)
     };

@@ -6,9 +6,9 @@ use crate::format::{fmt_clock, fmt_day, fmt_dur, fmt_euro};
 use crate::i18n::t;
 use crate::power::class_of;
 use crate::session::SessionSummary;
-use crate::theme::{class_number_color, double_bezel_card, ThemePalette};
+use crate::theme::{card, class_number_color, ThemePalette};
 use crate::ui::draw_meter_bar;
-use eframe::egui::{self, FontId, Margin, RichText, Rounding, Sense, Stroke, Vec2};
+use eframe::egui::{self, FontId, RichText, Rounding, Sense, Stroke, Vec2};
 use std::os::windows::process::CommandExt;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -19,7 +19,7 @@ impl StromWidgetApp {
     // =========================================================================
     pub(crate) fn render_tab_summary(&mut self, ui: &mut egui::Ui, pal: &ThemePalette) {
         let Some(sum) = self.active_summary.clone() else {
-            double_bezel_card(ui, pal, 10.0, Vec2::new(12.0, 12.0), |ui| {
+            card(ui, pal, 10.0, Vec2::new(12.0, 12.0), |ui| {
                 ui.label(
                     RichText::new(t("Session zu kurz", "Session too short"))
                         .font(FontId::proportional(15.0))
@@ -41,7 +41,11 @@ impl StromWidgetApp {
             return;
         };
 
-        double_bezel_card(ui, pal, 10.0, Vec2::new(12.0, 10.0), |ui| {
+        if self.frozen_chart.is_some() {
+            self.render_chart_section(ui, pal);
+            ui.add_space(14.0);
+        }
+        ui.vertical(|ui| {
             ui.label(
                 RichText::new(format!(
                     "{} \u{00b7} {} {}\u{2013}{}",
@@ -58,12 +62,7 @@ impl StromWidgetApp {
 
             let monthly_ct = (sum.cost / sum.dur_s.max(1.0)) * 3600.0 * 4.0 * 30.0;
             ui.columns(2, |cols| {
-                egui::Frame::none()
-                    .fill(pal.input_ground)
-                    .stroke(Stroke::new(1.5_f32, pal.rule_strong))
-                    .rounding(Rounding::same(7.0))
-                    .inner_margin(Margin::symmetric(10.0, 8.0))
-                    .show(&mut cols[0], |ui| {
+                card(&mut cols[0], pal, 8.0, Vec2::new(10.0, 8.0), |ui| {
                         ui.label(
                             RichText::new(fmt_euro(sum.cost))
                                 .font(FontId::proportional(24.0))
@@ -81,12 +80,7 @@ impl StromWidgetApp {
                         );
                     });
 
-                egui::Frame::none()
-                    .fill(pal.input_ground)
-                    .stroke(Stroke::new(1.5_f32, pal.rule_strong))
-                    .rounding(Rounding::same(7.0))
-                    .inner_margin(Margin::symmetric(10.0, 8.0))
-                    .show(&mut cols[1], |ui| {
+                card(&mut cols[1], pal, 8.0, Vec2::new(10.0, 8.0), |ui| {
                         ui.label(
                             RichText::new(fmt_euro(monthly_ct))
                                 .font(FontId::proportional(24.0))

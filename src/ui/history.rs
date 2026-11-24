@@ -5,7 +5,7 @@ use crate::format::{fmt_clock, fmt_day, fmt_dur, fmt_euro};
 use crate::i18n::t;
 use crate::power::class_of;
 use crate::session::SessionSummary;
-use crate::theme::{class_bg_color, double_bezel_card, draw_class_arrow, ThemePalette};
+use crate::theme::{card, class_bg_color, draw_class_arrow, kpi, section_title, ThemePalette};
 use eframe::egui::{self, Align, Color32, FontId, Layout, RichText, Sense, Vec2};
 
 impl StromWidgetApp {
@@ -13,25 +13,33 @@ impl StromWidgetApp {
     // TAB 3: SESSIONS (Verlauf)
     // =========================================================================
     pub(crate) fn render_tab_sessions(&mut self, ui: &mut egui::Ui, pal: &ThemePalette) {
-        let cur = self.session_mgr.current_summary();
+        let cur = &self.session_mgr.s;
         let total_ct: f64 = self.sessions_cache.iter().map(|s| s.cost).sum::<f64>() + cur.cost;
         let total_wh: f64 = self.sessions_cache.iter().map(|s| s.wh).sum::<f64>() + cur.wh;
+        let total_s: f64 = self.sessions_cache.iter().map(|s| s.dur_s).sum::<f64>() + self.session_mgr.dur_s();
+        let avg_txt = if total_s >= 60.0 {
+            format!("{:.0} W", total_wh / (total_s / 3600.0))
+        } else {
+            "\u{2013}".to_string()
+        };
+        let n = self.sessions_cache.len() + 1;
+        let n_txt = if n == 1 { t("1 Session", "1 session").to_string() } else { tr!("{} Sessions", "{} sessions", n) };
 
-        double_bezel_card(ui, pal, 8.0, Vec2::new(10.0, 8.0), |ui| {
-            ui.label(
-                RichText::new(tr!(
-                    "Gesamtverlauf: {} \u{00b7} {:.2} kWh \u{00b7} {} Sessions", "Total history: {} \u{00b7} {:.2} kWh \u{00b7} {} session(s)",
-                    fmt_euro(total_ct),
-                    total_wh / 1000.0,
-                    self.sessions_cache.len() + 1
-                ))
-                .font(FontId::proportional(12.0))
-                .strong()
-                .color(pal.ink),
+        section_title(ui, pal, t("Gesamt", "Total"), &n_txt);
+        ui.columns(3, |cols| {
+            kpi(&mut cols[0], pal, t("Kosten", "Cost"), &fmt_euro(total_ct), "", None);
+            kpi(
+                &mut cols[1],
+                pal,
+                t("Energie", "Energy"),
+                &format!("{:.1} kWh", total_wh / 1000.0).replace('.', crate::i18n::dec()),
+                "",
+                None,
             );
+            kpi(&mut cols[2], pal, t("Durchschnitt", "Average"), &avg_txt, &fmt_dur(total_s), None);
         });
-
-        ui.add_space(6.0);
+        ui.add_space(16.0);
+        section_title(ui, pal, "Sessions", t("neueste zuerst", "newest first"));
 
         if self.sessions_cache.is_empty() {
             ui.label(
@@ -46,7 +54,7 @@ impl StromWidgetApp {
 
         let mut clicked_summary: Option<SessionSummary> = None;
         for s in &self.sessions_cache {
-            double_bezel_card(ui, pal, 8.0, Vec2::new(10.0, 7.0), |ui| {
+            card(ui, pal, 8.0, Vec2::new(10.0, 7.0), |ui| {
                 let r = ui
                     .horizontal(|ui| {
                         let cls = class_of(s.avg_w);

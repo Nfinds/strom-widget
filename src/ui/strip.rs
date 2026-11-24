@@ -1,12 +1,8 @@
 //! The collapsed strip: docked into the taskbar or in a screen corner.
 
 use crate::{taskbar, StromWidgetApp};
-use crate::format::{fmt_dur, fmt_euro, fmt_money_ct, fmt_rate, fmt_rate_short};
-use crate::power::class_of;
-use crate::theme::{
-    draw_chevron_icon, draw_class_ring_badge, draw_net_arrow, load_color, number_color, pct_color,
-    ThemePalette,
-};
+use crate::format::{fmt_dur, fmt_euro, fmt_rate, fmt_rate_short};
+use crate::theme::{draw_chevron_icon, draw_net_arrow, number_color, pct_color, ThemePalette};
 use eframe::egui::{self, FontId, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 
 impl StromWidgetApp {
@@ -17,45 +13,28 @@ impl StromWidgetApp {
         let avail = ui.available_rect_before_wrap();
         let in_taskbar = self.settings.placement == "taskbar";
 
-        let ticker_h = if in_taskbar { 3.0 } else { 5.0 };
-        let sys_h = if self.settings.sys_addon && !in_taskbar {
+        let show_sys = self.settings.strip_shows_sys();
+        let sys_h = if show_sys && !in_taskbar {
             16.0
         } else {
             0.0
         };
-        let ticker_rect = Rect::from_min_max(
-            Pos2::new(avail.left() + 6.0, avail.bottom() - ticker_h - sys_h - 1.5),
-            Pos2::new(avail.right() - 6.0, avail.bottom() - sys_h - 1.5),
-        );
-        self.draw_mini_ticker(ui.painter(), ticker_rect);
 
-        // Shared vertical centerline above the mini ticker bar
+        // Shared vertical centerline. The watt figure carries the energy class as its color;
+        // the class letter itself is shown in the expanded panel.
         let content_top = avail.top() + 1.0;
-        let content_bot = ticker_rect.top() - 1.0;
+        let content_bot = avail.bottom() - sys_h - 1.0;
         let cy = (content_top + content_bot) * 0.5;
         let row1_y = cy - 6.2;
         let row2_y = cy + 6.2;
 
         let watts = self.reading.watts;
-        let cls = class_of(watts);
         let num_col = number_color(watts);
 
         let painter = ui.painter();
-        let mut x = avail.left() + if in_taskbar { 9.0 } else { 11.0 };
+        let mut x = avail.left() + if in_taskbar { 10.0 } else { 12.0 };
 
-        // 1. Leftmost: Circular Efficiency Ring Badge (A-G) in live EU Energy Label color
-        let ring_r = if in_taskbar { 11.0 } else { 12.5 };
-        let ring_center = Pos2::new(x + ring_r, cy);
-        draw_class_ring_badge(
-            painter,
-            ring_center,
-            ring_r,
-            cls,
-            if in_taskbar { 11.5 } else { 13.0 },
-        );
-        x += ring_r * 2.0 + 7.0;
-
-        // 2. Live Watt Figure + "W" unit on the shared centerline
+        // 1. Live Watt Figure + "W" unit on the shared centerline
         let w_font_sz = if in_taskbar {
             19.5
         } else if self.settings.size == "m" {
@@ -93,37 +72,32 @@ impl StromWidgetApp {
         );
         x += 7.5;
 
-        // 3. Cost per hour + running session cost/duration on exact row1_y / row2_y
-        let ct_per_h = (watts / 1000.0) * self.settings.price_ct;
-        let cur_sess = self.session_mgr.current_summary();
-        let ct_str = format!("{}/h", fmt_money_ct(ct_per_h));
-        let sess_str = format!("{} \u{00b7} {}", fmt_euro(cur_sess.cost), fmt_dur(cur_sess.dur_s));
-
-        let ct_galley = painter.layout_no_wrap(
-            ct_str,
+        // 2. Session so far: cost on top, running time below (cost per hour is in the panel)
+        let cost_galley = painter.layout_no_wrap(
+            fmt_euro(self.session_mgr.s.cost),
             FontId::proportional(if in_taskbar { 11.2 } else { 12.5 }),
             pal.ink,
         );
-        let sess_galley = painter.layout_no_wrap(
-            sess_str,
+        let dur_galley = painter.layout_no_wrap(
+            fmt_dur(self.session_mgr.dur_s()),
             FontId::proportional(if in_taskbar { 9.5 } else { 10.5 }),
             pal.ink_muted,
         );
-        let col3_w = ct_galley.size().x.max(sess_galley.size().x);
+        let col3_w = cost_galley.size().x.max(dur_galley.size().x);
         painter.galley(
-            Pos2::new(x, row1_y - ct_galley.size().y * 0.5),
-            ct_galley,
+            Pos2::new(x, row1_y - cost_galley.size().y * 0.5),
+            cost_galley,
             pal.ink,
         );
         painter.galley(
-            Pos2::new(x, row2_y - sess_galley.size().y * 0.5),
-            sess_galley,
+            Pos2::new(x, row2_y - dur_galley.size().y * 0.5),
+            dur_galley,
             pal.ink_muted,
         );
         x += col3_w + 8.0;
 
         // 4. In Taskbar Mode with System-Addon: Clean aligned CPU/RAM & Down/Up columns
-        if in_taskbar && self.settings.sys_addon {
+        if in_taskbar && show_sys {
             painter.line_segment(
                 [Pos2::new(x, cy - 10.5), Pos2::new(x, cy + 10.5)],
                 Stroke::new(1.0_f32, pal.rule_strong),
@@ -228,7 +202,7 @@ impl StromWidgetApp {
         );
 
         // Desktop compact sysline (when not in taskbar)
-        if !in_taskbar && self.settings.sys_addon {
+        if !in_taskbar && show_sys {
             let sys_rect = Rect::from_min_max(
                 Pos2::new(avail.left() + 10.0, avail.bottom() - sys_h),
                 Pos2::new(avail.right() - 10.0, avail.bottom() - 2.0),
@@ -308,34 +282,4 @@ impl StromWidgetApp {
         }
     }
 
-    fn draw_mini_ticker(&self, painter: &egui::Painter, rect: Rect) {
-        let n = 60usize;
-        let len = self.session_mgr.live.len();
-        if len == 0 {
-            return;
-        }
-        let slice = &self.session_mgr.live[len.saturating_sub(n)..];
-        let min_w = slice
-            .iter()
-            .map(|s| s.w)
-            .fold(f64::INFINITY, f64::min)
-            * 0.6;
-        let max_w = slice
-            .iter()
-            .map(|s| s.w)
-            .fold(min_w + 150.0, f64::max);
-
-        let slot = rect.width() / (n as f32);
-        let offset = n.saturating_sub(slice.len());
-        for (i, s) in slice.iter().enumerate() {
-            let x = rect.left() + ((offset + i) as f32) * slot;
-            let frac = ((s.w - min_w) / (max_w - min_w)).clamp(0.18, 1.0) as f32;
-            let bh = (rect.height() * frac).max(1.5);
-            let bar_rect = Rect::from_min_max(
-                Pos2::new(x, rect.bottom() - bh),
-                Pos2::new(x + (slot - 1.0).max(1.0), rect.bottom()),
-            );
-            painter.rect_filled(bar_rect, 0.0, load_color(s.w));
-        }
-    }
 }

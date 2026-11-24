@@ -563,6 +563,11 @@ impl SessionManager {
         summary
     }
 
+    /// Running time of the current session in seconds (cheap, for per-frame labels).
+    pub fn dur_s(&self) -> f64 {
+        (self.s.last.saturating_sub(self.s.start)) as f64 / 1000.0
+    }
+
     pub fn current_summary(&self) -> SessionSummary {
         self.summary_of(&self.s, "l\u{00e4}uft")
     }

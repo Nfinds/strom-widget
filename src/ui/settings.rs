@@ -3,7 +3,7 @@
 use crate::{autostart, i18n, theme, StromWidgetApp};
 use crate::i18n::t;
 use crate::power::parse_price;
-use crate::theme::{double_bezel_card, ThemePalette, THEMES};
+use crate::theme::{card, ThemePalette, THEMES};
 use eframe::egui::{self, Align, Color32, FontId, Layout, RichText, Rounding, Stroke, Vec2};
 
 impl StromWidgetApp {
@@ -16,7 +16,7 @@ impl StromWidgetApp {
         ctx: &egui::Context,
         pal: &ThemePalette,
     ) {
-        double_bezel_card(ui, pal, 10.0, Vec2::new(12.0, 10.0), |ui| {
+        card(ui, pal, 10.0, Vec2::new(12.0, 10.0), |ui| {
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(t("Position", "Placement"))
@@ -382,6 +382,17 @@ impl StromWidgetApp {
                     t("System-Addon (CPU, RAM, Netzwerk, Ports & Web-UIs)", "System add-on (CPU, RAM, network, ports & web UIs)"),
                 )
                 .changed()
+            {
+                self.settings.save();
+                self.sync_window_geometry(ctx, true);
+            }
+            if self.settings.sys_addon
+                && ui
+                    .checkbox(
+                        &mut self.settings.strip_sys,
+                        t("CPU, RAM und Netz auch in der Leiste zeigen", "Also show CPU, RAM and network in the strip"),
+                    )
+                    .changed()
             {
                 self.settings.save();
                 self.sync_window_geometry(ctx, true);

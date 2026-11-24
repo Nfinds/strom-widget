@@ -450,34 +450,85 @@ pub fn draw_net_arrow(painter: &egui::Painter, center: Pos2, down: bool, color: 
     }
 }
 
-/// Double-Bezel Card wrapper (Outer Shell + Inner Core with concentric radii)
-pub fn double_bezel_card<R>(
+/// A flat card: one fill, one hairline. Only for things that stand on their own or can be
+/// clicked (list rows, notices); plain sections use `section_title` and spacing instead.
+pub fn card<R>(
     ui: &mut egui::Ui,
     pal: &ThemePalette,
-    outer_rounding: f32,
+    rounding: f32,
     inner_padding: Vec2,
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
     egui::Frame::none()
-        .fill(pal.outer_shell)
+        .fill(pal.card)
         .stroke(Stroke::new(1.0_f32, pal.rule))
-        .rounding(Rounding::same(outer_rounding))
-        .inner_margin(egui::Margin::same(3.0))
+        .rounding(Rounding::same(rounding.min(8.0)))
+        .inner_margin(egui::Margin::symmetric(inner_padding.x, inner_padding.y))
         .show(ui, |ui| {
-            egui::Frame::none()
-                .fill(pal.card)
-                .stroke(Stroke::new(1.0_f32, pal.rule_strong.gamma_multiply(0.55)))
-                .rounding(Rounding::same((outer_rounding - 3.0).max(5.0)))
-                .inner_margin(egui::Margin {
-                    left: inner_padding.x,
-                    right: inner_padding.x,
-                    top: inner_padding.y,
-                    bottom: inner_padding.y,
-                })
-                .show(ui, add_contents)
-                .inner
+            ui.set_min_width(ui.available_width());
+            add_contents(ui)
         })
         .inner
+}
+
+/// Small grey heading of a section with an optional note on the right. Returns the response of
+/// the note, so a caller can make it a link ("show all").
+pub fn section_title(ui: &mut egui::Ui, pal: &ThemePalette, title: &str, note: &str) -> egui::Response {
+    let w = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(w, 16.0), egui::Sense::hover());
+    let cy = rect.center().y;
+    ui.painter().text(
+        Pos2::new(rect.left(), cy),
+        egui::Align2::LEFT_CENTER,
+        title,
+        egui::FontId::proportional(11.5),
+        pal.ink_muted,
+    );
+    let note_rect = if note.is_empty() {
+        Rect::from_min_size(rect.right_top(), Vec2::ZERO)
+    } else {
+        ui.painter().text(
+            Pos2::new(rect.right(), cy),
+            egui::Align2::RIGHT_CENTER,
+            note,
+            egui::FontId::proportional(11.0),
+            faint(pal),
+        )
+    };
+    ui.add_space(4.0);
+    ui.interact(note_rect, ui.id().with(("section_note", title)), egui::Sense::click())
+}
+
+/// A label/value/sub-line figure (used three across). Sub-line may be empty.
+pub fn kpi(ui: &mut egui::Ui, pal: &ThemePalette, label: &str, value: &str, sub: &str, sub_col: Option<Color32>) {
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 1.0;
+        ui.label(egui::RichText::new(label).font(egui::FontId::proportional(10.5)).color(pal.ink_muted));
+        ui.label(egui::RichText::new(value).font(egui::FontId::proportional(17.0)).strong().color(pal.ink));
+        if !sub.is_empty() {
+            ui.label(
+                egui::RichText::new(sub)
+                    .font(egui::FontId::proportional(10.5))
+                    .color(sub_col.unwrap_or_else(|| faint(pal))),
+            );
+        }
+    });
+}
+
+/// The quietest text color: halfway between muted ink and the ground.
+pub fn faint(pal: &ThemePalette) -> Color32 {
+    let mix = |x: u8, y: u8| ((x as u16 + y as u16) / 2 + 8).min(255) as u8;
+    let (a, b) = (pal.ink_muted, pal.ground);
+    Color32::from_rgb(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()))
+}
+
+/// Legend dot: filled for a measured value, a ring for an estimate.
+pub fn draw_legend_dot(painter: &egui::Painter, center: Pos2, col: Color32, filled: bool) {
+    if filled {
+        painter.circle_filled(center, 3.6, col);
+    } else {
+        painter.circle_stroke(center, 3.0, Stroke::new(1.6_f32, col));
+    }
 }
 
 /// Display name of a theme in the current language.

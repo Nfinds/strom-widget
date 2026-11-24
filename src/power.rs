@@ -38,6 +38,9 @@ pub struct Settings {
     pub opacity: u8,
     pub theme: String,
     pub sys_addon: bool,
+    /// CPU, RAM and network also in the collapsed strip (makes it about 110 px wider).
+    #[serde(default)]
+    pub strip_sys: bool,
     pub size: String, // "xs" | "m"
     #[serde(default = "default_lang")]
     pub lang: String, // "de" | "en"
@@ -94,6 +97,7 @@ impl Default for Settings {
             opacity: 100,
             theme: "label".to_string(),
             sys_addon: true,
+            strip_sys: false,
             size: "xs".to_string(),
             lang: default_lang(),
             currency: default_currency(),
@@ -112,6 +116,22 @@ impl Settings {
             PathBuf::from(appdata).join("Strom-Widget")
         } else {
             PathBuf::from(".").join("Strom-Widget-Data")
+        }
+    }
+
+    /// Whether the collapsed strip shows the CPU/RAM/network columns.
+    pub fn strip_shows_sys(&self) -> bool {
+        self.sys_addon && self.strip_sys
+    }
+
+    /// Width of the strip docked in the taskbar (points): watts, session cost and time,
+    /// chevron, plus the CPU/RAM and network columns when they are switched on.
+    pub fn taskbar_strip_width(&self) -> i32 {
+        match (self.strip_shows_sys(), self.size == "m") {
+            (true, true) => 262,
+            (true, false) => 248,
+            (false, true) => 152,
+            (false, false) => 138,
         }
     }
 
@@ -189,6 +209,9 @@ impl Settings {
                     }
                     if let Some(v) = obj.get("sysAddon").and_then(|x| x.as_bool()) {
                         s.sys_addon = v;
+                    }
+                    if let Some(v) = obj.get("stripSys").and_then(|x| x.as_bool()) {
+                        s.strip_sys = v;
                     }
                     if let Some(v) = obj.get("size").and_then(|x| x.as_str()) {
                         s.size = v.to_string();

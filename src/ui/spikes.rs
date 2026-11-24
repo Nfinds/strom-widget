@@ -1,20 +1,43 @@
-//! Spikes tab: the load peaks of the running session and their cause.
+//! Spike list: the load peaks of the running session and their cause. Reached from the
+//! "Spikes" section of the "Now" tab.
 
-use crate::StromWidgetApp;
+use crate::{ActiveTab, StromWidgetApp};
 use crate::format::{fmt_clock, fmt_dur, fmt_money_ct};
 use crate::i18n::t;
 use crate::power::class_of;
 use crate::session::Spike;
-use crate::theme::{class_bg_color, double_bezel_card, draw_class_arrow, number_color, ThemePalette};
-use eframe::egui::{self, Align, Color32, FontId, Layout, RichText, Rounding, Sense, Stroke, Vec2};
+use crate::theme::{card, class_bg_color, draw_class_arrow, number_color, ThemePalette};
+use eframe::egui::{self, Align, Color32, CursorIcon, FontId, Layout, RichText, Rounding, Sense, Stroke, Vec2};
+
+/// How many spikes the "Now" tab shows before "see all".
+pub(crate) const OVERVIEW_SPIKES: usize = 3;
 
 impl StromWidgetApp {
-    // =========================================================================
-    // TAB 2: SPIKES
-    // =========================================================================
+    /// Which spikes the "Now" tab shows, as indices into `session_mgr.s.spikes`, in display
+    /// order (top row first). At most `OVERVIEW_SPIKES`.
+    pub(crate) fn overview_spikes(&self) -> Vec<usize> {
+        let spikes = &self.session_mgr.s.spikes;
+        // The newest three, newest first: "Now" answers "what just happened"; the full list
+        // (with costs) is one click away.
+        (0..spikes.len()).rev().take(OVERVIEW_SPIKES).collect()
+    }
+
     pub(crate) fn render_tab_spikes(&mut self, ui: &mut egui::Ui, pal: &ThemePalette) {
+        let back = ui.add(
+            egui::Label::new(
+                RichText::new(t("\u{2190} Jetzt", "\u{2190} Now"))
+                    .font(FontId::proportional(11.5))
+                    .color(pal.ink_muted),
+            )
+            .sense(Sense::click()),
+        );
+        if back.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+            self.active_tab = ActiveTab::Live;
+        }
+        ui.add_space(8.0);
+
         if self.session_mgr.s.spikes.is_empty() {
-            double_bezel_card(ui, pal, 10.0, Vec2::new(12.0, 12.0), |ui| {
+            card(ui, pal, 10.0, Vec2::new(12.0, 12.0), |ui| {
                 ui.label(
                     RichText::new(
                         t("Noch keine Spikes in dieser Session.\nAls Spike z\u{00e4}hlt, wenn die Leistung mindestens 60 W und 35 % \u{00fc}ber der Grundlast der letzten zwei Minuten liegt.", "No spikes in this session yet.\nA spike is counted when the power is at least 60 W and 35 % above the base load of the last two minutes."),
@@ -47,7 +70,7 @@ impl StromWidgetApp {
                 fmt_dur(secs)
             };
 
-            double_bezel_card(ui, pal, 8.0, Vec2::new(10.0, 8.0), |ui| {
+            card(ui, pal, 8.0, Vec2::new(10.0, 8.0), |ui| {
                 let resp = ui
                     .horizontal(|ui| {
                         let cls = class_of(sp.peak);
