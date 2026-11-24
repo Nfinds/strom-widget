@@ -191,6 +191,11 @@ impl DayBook {
         self.range(from, to).find(|(_, d)| d.rx + d.tx > 0.0).map(|(k, _)| *k)
     }
 
+    /// First recorded day in the range (any running time or cost).
+    pub fn first_day(&self, from: NaiveDate, to: NaiveDate) -> Option<NaiveDate> {
+        self.range(from, to).find(|(_, d)| d.on_s > 0.0 || d.cost > 0.0).map(|(k, _)| *k)
+    }
+
     pub fn busiest_net_day(&self, from: NaiveDate, to: NaiveDate) -> Option<(NaiveDate, f64)> {
         self.range(from, to)
             .map(|(k, d)| (*k, d.rx + d.tx))
@@ -202,11 +207,55 @@ impl DayBook {
 /// Expected cost (cents) of the whole month that `today` lies in, from the days recorded so
 /// far. Used for "Projection" in History and for the budget warning.
 pub fn month_projection(book: &DayBook, today: NaiveDate) -> f64 {
+    let now = Local::now();
+    let day_frac = if now.date_naive() == today { now.num_seconds_from_midnight() as f64 / 86_400.0 } else { 1.0 };
+    month_projection_at(book, today, day_frac)
+}
+
+/// Completed days the daily rate is taken from: two weeks even out weekday and weekend.
+const RATE_DAYS: i64 = 14;
+
+/// `month_projection` at a given point of `today` (0.0 = midnight, 1.0 = day over).
+///
+/// Spent so far + the rest of today + a typical day for each day still to come. The typical
+/// day is the average of the last `RATE_DAYS` completed days (counted from the first recorded
+/// day, so a fresh install is not diluted; days the PC stayed off count as zero). How much of
+/// today is still ahead comes from the hourly profile of those days, so an evening with
+/// the PC usually off does not add a full day's share. Without any completed day yet, today
+/// is extrapolated from the time elapsed.
+pub(crate) fn month_projection_at(book: &DayBook, today: NaiveDate, day_frac: f64) -> f64 {
     let so_far = book.total(month_start(today), today).cost;
-    let dim = days_in_month(today) as f64;
-    // TODO(human): turn what was spent so far into a forecast for the full month.
-    // Placeholder: spread evenly, counting today as a full day.
-    so_far / today.day() as f64 * dim
+    let today_cost = book.day(today).map_or(0.0, |d| d.cost);
+    let days_after = (days_in_month(today) - today.day()) as f64;
+    let day_frac = day_frac.clamp(0.0, 1.0);
+
+    let to = today - chrono::Duration::days(1);
+    let from = to - chrono::Duration::days(RATE_DAYS - 1);
+    let Some(first) = book.first_day(from, to) else {
+        // Nothing before today: today so far, scaled to a whole day (at least one hour seen).
+        let rate = today_cost / day_frac.max(1.0 / 24.0);
+        return so_far + rate * (1.0 - day_frac) + rate * days_after;
+    };
+    let n = (to - first).num_days() as f64 + 1.0;
+    let rate = book.total(first, to).cost / n;
+
+    // Share of a typical day's energy that falls after `day_frac`.
+    let mut profile = [0.0f64; 24];
+    for (_, d) in book.range(first, to) {
+        for (p, h) in profile.iter_mut().zip(d.hours.iter()) {
+            *p += h;
+        }
+    }
+    let total: f64 = profile.iter().sum();
+    let rest_share = if total > 0.0 {
+        let pos = day_frac * 24.0;
+        let hour = (pos as usize).min(23);
+        let in_hour = profile[hour] * (1.0 - (pos - hour as f64));
+        (in_hour + profile[hour + 1..].iter().sum::<f64>()) / total
+    } else {
+        1.0 - day_frac
+    };
+    so_far + rate * rest_share + rate * days_after
 }
 
 /// Today's local date.
@@ -249,6 +298,48 @@ mod tests {
         assert_eq!(month_before(d), NaiveDate::from_ymd_opt(2026, 2, 28).unwrap());
         assert_eq!(month_before(NaiveDate::from_ymd_opt(2026, 1, 15).unwrap()), NaiveDate::from_ymd_opt(2025, 12, 15).unwrap());
         assert_eq!(days_in_month(NaiveDate::from_ymd_opt(2028, 2, 1).unwrap()), 29);
+    }
+
+    fn book_with(days: &[(NaiveDate, f64, [f64; 24])]) -> DayBook {
+        let mut b = DayBook { path: PathBuf::new(), days: BTreeMap::new(), last_save: u64::MAX, dirty: false };
+        for (d, cost, hours) in days {
+            b.days.insert(*d, DayStats { cost: *cost, on_s: 3600.0, wh: hours.iter().sum(), hours: *hours, ..Default::default() });
+        }
+        b
+    }
+
+    #[test]
+    fn projection_uses_typical_day_and_rest_of_today() {
+        let flat = [10.0; 24];
+        let june = |d| NaiveDate::from_ymd_opt(2026, 6, d).unwrap();
+        // 14 completed days at 100 ct, today half done with 50 ct: 1450 + 50 + 15 x 100.
+        let mut days: Vec<_> = (1..=14).map(|d| (june(d), 100.0, flat)).collect();
+        days.push((june(15), 50.0, flat));
+        let p = month_projection_at(&book_with(&days), june(15), 0.5);
+        assert!((p - 3000.0).abs() < 1e-6, "{p}");
+
+        // PC usually only on in the morning: at noon nothing of the day is left.
+        let mut morning = [0.0; 24];
+        morning[8] = 50.0;
+        morning[9] = 50.0;
+        let mut days: Vec<_> = (1..=14).map(|d| (june(d), 100.0, morning)).collect();
+        days.push((june(15), 100.0, morning));
+        let p = month_projection_at(&book_with(&days), june(15), 0.5);
+        assert!((p - 3000.0).abs() < 1e-6, "{p}");
+    }
+
+    #[test]
+    fn projection_edge_cases() {
+        let june = |d| NaiveDate::from_ymd_opt(2026, 6, d).unwrap();
+        // First day of the month, nothing before: 30 ct by 6:00 -> 120 ct a day x 30 days.
+        let p = month_projection_at(&book_with(&[(june(1), 30.0, [0.0; 24])]), june(1), 0.25);
+        assert!((p - 3600.0).abs() < 1e-6, "{p}");
+        // Recording started three days ago: the rate comes from those three days only.
+        let b = book_with(&[(june(12), 90.0, [0.0; 24]), (june(13), 90.0, [0.0; 24]), (june(14), 90.0, [0.0; 24])]);
+        let p = month_projection_at(&b, june(15), 1.0);
+        assert!((p - (270.0 + 15.0 * 90.0)).abs() < 1e-6, "{p}");
+        // Empty book: no forecast beyond zero.
+        assert_eq!(month_projection_at(&book_with(&[]), june(15), 0.5), 0.0);
     }
 
     #[test]

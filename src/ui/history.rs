@@ -211,13 +211,19 @@ impl StromWidgetApp {
                     .collect();
                 let jan1 = NaiveDate::from_ymd_opt(year, 1, 1).unwrap_or(today);
                 let so_far = book.total(jan1, today);
-                let months = (today.month() - 1) as f64 + today.day() as f64 / days_in_month(today) as f64;
+                // Months since recording began this year, not since January 1: with data from
+                // mid-October on, dividing by ten and a half months would show a fraction.
+                let start = book.first_day(jan1, today).unwrap_or(today);
+                let months = ((today - start).num_days() + 1) as f64 / 30.44;
                 let per_month = so_far.cost / months.max(0.03);
+                // What this calendar year will have cost: recorded so far + the rest at this pace.
+                let dec31 = NaiveDate::from_ymd_opt(year, 12, 31).unwrap_or(today);
+                let year_projection = so_far.cost + per_month * (dec31 - today).num_days() as f64 / 30.44;
                 let prev_year = NaiveDate::from_ymd_opt(year - 1, 1, 1)
                     .zip(NaiveDate::from_ymd_opt(year - 1, 12, 31))
                     .map(|(a, b)| book.total(a, b).cost)
                     .unwrap_or(0.0);
-                let vs = match delta(per_month * 12.0, prev_year) {
+                let vs = match delta(year_projection, prev_year) {
                     Some((d, c)) => (tr!("{}: {} \u{00b7} {}", "{}: {} \u{00b7} {}", year - 1, fmt_euro(prev_year), d), Some(c)),
                     None => (t("bis Jahresende", "by year end").to_string(), None),
                 };
@@ -226,7 +232,7 @@ impl StromWidgetApp {
                     kpis: [
                         (t("Jahr bisher", "Year so far").into(), fmt_euro(so_far.cost), fmt_kwh(so_far.wh), None),
                         (t("\u{00d8} pro Monat", "Avg per month").into(), fmt_euro(per_month), fmt_kwh(so_far.wh / months.max(0.03)), None),
-                        (t("Hochrechnung", "Projection").into(), fmt_euro(per_month * 12.0), vs.0, vs.1),
+                        (t("Hochrechnung", "Projection").into(), fmt_euro(year_projection), vs.0, vs.1),
                     ],
                     bars,
                     avg: Some(per_month),
